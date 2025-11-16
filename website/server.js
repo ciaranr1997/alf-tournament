@@ -222,7 +222,266 @@ app.get('/admin/tournaments/:tournamentId', requireRole(ROLES.ADMIN), (req, res)
     });
     res.send(pageHtml);
 });
+
+app.get('/staff/killers/edit', requireRole(ROLES.STAFF), async (req, res) => { // Note: This route was previously duplicated, I've removed the extra one.
+    try {
+        const [killers] = await dbPool.query('SELECT killer_id, killer_name, allowed, tier, art_url FROM Killers ORDER BY killer_order');
+        const [tiers] = await dbPool.query('SELECT tier_id, tier_name FROM Tiers ORDER BY tier_id');
+        const [rules] = await dbPool.query('SELECT killer_id, role, category, rule_text FROM KillerRules ORDER BY killer_id, role, category');
+        const [maps] = await dbPool.query(`
+            SELECT km.killer_id, m.map_name, km.priority 
+            FROM KillerMaps km 
+            JOIN Maps m ON km.map_id = m.map_id 
+            ORDER BY km.killer_id, km.priority
+        `);
+
+        // Group rules and maps by killer_id for easy lookup
+        const rulesByKiller = rules.reduce((acc, rule) => {
+            if (!acc[rule.killer_id]) acc[rule.killer_id] = [];
+            acc[rule.killer_id].push(rule);
+            return acc;
+        }, {});
+
+        const mapsByKiller = maps.reduce((acc, map) => {
+            if (!acc[map.killer_id]) acc[map.killer_id] = [];
+            acc[map.killer_id].push(map);
+            return acc;
+        }, {});
+
+        const killerListHtml = killers.map(killer => {
+            const tierOptions = tiers.map(tier => 
+                `<option value="${tier.tier_id}" ${killer.tier == tier.tier_id ? 'selected' : ''}>${tier.tier_name}</option>`
+            ).join('');
+
+            const killerRules = rulesByKiller[killer.killer_id] || [];
+            const killerMaps = mapsByKiller[killer.killer_id] || [];
+
+            const rulesHtml = `
+                <div class="rules-section">
+                    <h4 class="font-semibold text-lg mb-2">Rules</h4>
+                    ${killerRules.length > 0 ? killerRules.map(r => `<div class="rule-item"><span class="font-bold">${r.role} - ${r.category}:</span> <p class="text-sm text-gray-300 break-words">${r.rule_text}</p></div>`).join('') : '<p class="text-sm text-gray-400">No specific rules.</p>'}
+                    <h4 class="font-semibold text-lg mt-4 mb-2">Map Priority</h4>
+                    ${killerMaps.length > 0 ? killerMaps.map(m => `<p class="text-sm text-gray-300">${m.priority}: ${m.map_name}</p>`).join('') : '<p class="text-sm text-gray-400">No map priorities set.</p>'}
+                </div>
+            `;
+
+            return `
+                <div class="killer-card">
+                    <img src="${killer.art_url || '/public/default-killer.png'}" alt="${killer.killer_name}" class="killer-art">
+                    <div class="killer-header">
+                        <h2 class="text-xl font-bold">${killer.killer_name}</h2>
+                    </div>
+                    <div class="killer-body">
+                        <form class="killer-edit-form space-y-4" data-killer-id="${killer.killer_id}">
+                            <div>
+                                <label class="form-label flex items-center">
+                                    <input type="checkbox" name="allowed" class="form-checkbox mr-2" ${killer.allowed ? 'checked' : ''}>
+                                    Allowed
+                                </label>
+                            </div>
+                            <div>
+                                <label for="tier-${killer.killer_id}" class="form-label">Tier</label>
+                                <select id="tier-${killer.killer_id}" name="tier" class="form-select">${tierOptions}</select>
+                            </div>
+                            <div class="flex space-x-2">
+                                <button type="submit" class="save-btn w-1/2">Save</button>
+                                <a href="/staff/killers/rules/edit/${killer.killer_id}" class="rules-btn w-1/2">Edit Rules</a>
+                            </div>
+                        </form>
+                        ${rulesHtml}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        const pageHtml = readTemplate('staff_killers_edit.html', { KILLER_LIST: killerListHtml });
+        res.send(pageHtml);
+    } catch (error) {
+        console.error('Error loading killer balancing page:', error);
+        res.status(500).send(generateErrorPage('500 Server Error', 'Could not load killer data.'));
+    }
+});
+
+app.get('/staff/killers/rules/edit/:killerId', requireRole(ROLES.STAFF), async (req, res) => {
+    const { killerId } = req.params;
+    try {
+        const [killers] = await dbPool.query('SELECT killer_name FROM Killers WHERE killer_id = ?', [killerId]);
+        if (killers.length === 0) {
+            return res.status(404).send(generateErrorPage('404 Not Found', 'Killer not found.'));
+        }
+        const killerName = killers[0].killer_name;
+
+        const [allMaps] = await dbPool.query('SELECT map_id, map_name FROM Maps ORDER BY map_name');
+        const [killerMaps] = await dbPool.query('SELECT map_id, priority FROM KillerMaps WHERE killer_id = ?', [killerId]);
+        const [killerRules] = await dbPool.query('SELECT rule_id, role, category, rule_text FROM KillerRules WHERE killer_id = ? ORDER BY role, category', [killerId]);
+
+        const mapPriority = { 1: null, 2: null, 3: null };
+        killerMaps.forEach(km => {
+            mapPriority[km.priority] = km.map_id;
+        });
+
+        const generateOptions = (selectedId) => allMaps.map(map => 
+            `<option value="${map.map_id}" ${map.map_id == selectedId ? 'selected' : ''}>${map.map_name}</option>`
+        ).join('');
+
+        const existingRulesHtml = killerRules.map(rule => `
+            <form class="rule-item-form" data-rule-id="${rule.rule_id}">
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-center">
+                    <div>
+                        <label class="form-label text-sm">Role</label>
+                        <select name="role" class="form-select">
+                            <option value="Killer" ${rule.role === 'Killer' ? 'selected' : ''}>Killer</option>
+                            <option value="Survivor" ${rule.role === 'Survivor' ? 'selected' : ''}>Survivor</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label text-sm">Category</label>
+                        <input type="text" name="category" class="form-input" value="${rule.category}">
+                    </div>
+                    <div class="md:col-span-2">
+                        <label class="form-label text-sm">Rule Text</label>
+                        <textarea name="rule_text" class="form-textarea" rows="2">${rule.rule_text}</textarea>
+                    </div>
+                </div>
+                <div class="flex justify-end space-x-2 mt-2">
+                    <button type="submit" class="btn btn-primary btn-sm">Update</button>
+                    <button type="button" class="btn btn-danger btn-sm delete-rule-btn" data-rule-id="${rule.rule_id}">Delete</button>
+                </div>
+            </form>
+        `).join('');
+
+        const replacements = {
+            KILLER_ID: killerId,
+            KILLER_NAME: killerName,
+            MAP_OPTIONS_1: generateOptions(mapPriority[1]),
+            MAP_OPTIONS_2: generateOptions(mapPriority[2]),
+            MAP_OPTIONS_3: generateOptions(mapPriority[3]),
+            EXISTING_RULES: existingRulesHtml
+        };
+
+        const pageHtml = readTemplate('staff_killer_rules_edit.html', replacements);
+        res.send(pageHtml);
+
+    } catch (error) {
+        console.error(`Error loading rules edit page for killer ${killerId}:`, error);
+        res.status(500).send(generateErrorPage('500 Server Error', 'Could not load killer rule data.'));
+    }
+});
+
 // --- API ENDPOINTS ---
+
+app.get('/api/killers', requireRole(ROLES.STAFF), async (req, res) => {
+    try {
+        const [killers] = await dbPool.query('SELECT killer_id, killer_name, allowed, tier FROM Killers ORDER BY killer_order');
+        res.json(killers);
+    } catch (error) {
+        console.error('Error fetching killers:', error);
+        res.status(500).json({ message: 'Error fetching killers' });
+    }
+});
+
+app.get('/api/tiers', requireRole(ROLES.STAFF), async (req, res) => {
+    try {
+        const [tiers] = await dbPool.query('SELECT tier_id, tier_name FROM Tiers ORDER BY tier_id');
+        res.json(tiers);
+    } catch (error) {
+        console.error('Error fetching tiers:', error);
+        res.status(500).json({ message: 'Error fetching tiers' });
+    }
+});
+
+app.put('/api/killers/:killerId', requireRole(ROLES.STAFF), async (req, res) => {
+    const { killerId } = req.params;
+    const { allowed, tier } = req.body;
+
+    try {
+        await dbPool.execute(
+            'UPDATE Killers SET allowed = ?, tier = ? WHERE killer_id = ?',
+            [allowed, tier, killerId]
+        );
+        res.json({ message: 'Killer updated successfully' });
+    } catch (error) {
+        console.error(`Error updating killer ${killerId}:`, error);
+        res.status(500).json({ message: 'Error updating killer' });
+    }
+});
+
+app.put('/api/killers/:killerId/maps', requireRole(ROLES.STAFF), async (req, res) => {
+    const { killerId } = req.params;
+    const { maps } = req.body; // Expects an array of { map_id, priority }
+
+    const conn = await dbPool.getConnection();
+    try {
+        await conn.beginTransaction();
+        // Clear existing priorities for this killer
+        await conn.execute('DELETE FROM KillerMaps WHERE killer_id = ?', [killerId]);
+
+        // Insert new priorities if any are provided
+        if (maps && maps.length > 0) {
+            const values = maps.map(m => [killerId, m.map_id, m.priority]);
+            await conn.query('INSERT INTO KillerMaps (killer_id, map_id, priority) VALUES ?', [values]);
+        }
+
+        await conn.commit();
+        res.json({ message: 'Map priorities updated successfully.' });
+    } catch (error) {
+        await conn.rollback();
+        console.error(`Error updating map priorities for killer ${killerId}:`, error);
+        res.status(500).json({ message: 'Failed to update map priorities.' });
+    } finally {
+        conn.release();
+    }
+});
+
+app.put('/api/killers/rules/:ruleId', requireRole(ROLES.STAFF), async (req, res) => {
+    const { ruleId } = req.params;
+    const { role, category, rule_text } = req.body;
+
+    try {
+        const [result] = await dbPool.execute(
+            'UPDATE KillerRules SET role = ?, category = ?, rule_text = ? WHERE rule_id = ?',
+            [role, category, rule_text, ruleId]
+        );
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Rule not found.' });
+        }
+        res.json({ message: 'Rule updated successfully.' });
+    } catch (error) {
+        console.error(`Error updating rule ${ruleId}:`, error);
+        res.status(500).json({ message: 'Failed to update rule.' });
+    }
+});
+
+app.post('/api/killers/:killerId/rules', requireRole(ROLES.STAFF), async (req, res) => {
+    const { killerId } = req.params;
+    const { role, category, rule_text } = req.body;
+
+    try {
+        const [result] = await dbPool.execute(
+            'INSERT INTO KillerRules (killer_id, role, category, rule_text) VALUES (?, ?, ?, ?)',
+            [killerId, role, category, rule_text]
+        );
+        const newRuleId = result.insertId;
+        res.status(201).json({ message: 'Rule added successfully.', rule: { rule_id: newRuleId, killer_id: killerId, ...req.body } });
+    } catch (error) {
+        console.error(`Error adding rule for killer ${killerId}:`, error);
+        res.status(500).json({ message: 'Failed to add rule.' });
+    }
+});
+
+app.delete('/api/killers/:killerId/rules/:ruleId', requireRole(ROLES.STAFF), async (req, res) => {
+    const { ruleId } = req.params;
+    try {
+        const [result] = await dbPool.execute('DELETE FROM KillerRules WHERE rule_id = ?', [ruleId]);
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Rule not found.' });
+        }
+        res.json({ message: 'Rule deleted successfully.' });
+    } catch (error) {
+        console.error(`Error deleting rule ${ruleId}:`, error);
+        res.status(500).json({ message: 'Failed to delete rule.' });
+    }
+});
 
 app.get('/api/staff/users', requireRole(ROLES.STAFF), async (req, res) => {
     const cacheKey = `cache:guild-members:${DISCORD_GUILD_ID}`;

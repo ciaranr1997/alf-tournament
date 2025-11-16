@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Staff - Killers</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+</head>
+<body>
+    <div class="container">
+        <h1 class="mt-4">Killers</h1>
+        <a href="/staff" class="btn btn-secondary mt-2 mb-4">Back to Staff Panel</a>
+        <a href="/staff/killers/add" class="btn btn-primary mt-2 mb-4">Add Killer</a>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Name</th>
+                    <th>Speed</th>
+                    <th>Power</th>
+                    <th>Reach</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% killers.forEach(killer => { %>
+                    <tr>
+                        <td><%= killer.id %></td>
+                        <td><%= killer.name %></td>
+                        <td><%= killer.speed %></td>
+                        <td><%= killer.power %></td>
+                        <td><%= killer.reach %></td>
+                        <td>
+                            <a href="/staff/killers/edit/<%= killer.id %>" class="btn btn-warning">Edit</a>
+                        </td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>

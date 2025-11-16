@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Edit Killer Rules - {{KILLER_NAME}}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #1f2937; color: #f9fafb; }
+        .card { background-color: #374151; padding: 2rem; border-radius: 0.5rem; }
+        .form-label { font-weight: bold; margin-bottom: 0.5rem; display: block; }
+        .form-input, .form-select, .form-textarea {
+            width: 100%;
+            padding: 0.5rem;
+            border-radius: 0.25rem;
+            background-color: #4a5568;
+            border: 1px solid #718096;
+            color: #f9fafb;
+        }
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 0.25rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .btn-primary { background-color: #4f46e5; color: white; }
+        .btn-primary:hover { background-color: #4338ca; }
+        .btn-danger { background-color: #dc2626; color: white; }
+        .btn-danger:hover { background-color: #b91c1c; }
+        .btn-sm { padding: 0.25rem 0.75rem; font-size: 0.875rem; }
+        .rule-item-form {
+            background-color: #2d3748;
+            padding: 0.75rem;
+            border-radius: 0.25rem;
+            margin-bottom: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mx-auto p-4">
+        <div class="flex justify-between items-center mb-4">
+            <h1 class="text-3xl font-bold">Edit Rules for <span class="text-indigo-400">{{KILLER_NAME}}</span></h1>
+            <a href="/staff/killers/edit" class="text-indigo-400 hover:text-indigo-300">&larr; Back to Killer Balancing</a>
+        </div>
+
+        <!-- Map Priorities -->
+        <div class="card mb-6">
+            <h2 class="text-2xl font-bold mb-4">Map Priorities</h2>
+            <form id="map-form">
+                <div class="space-y-4">
+                    <div>
+                        <label for="map-priority-1" class="form-label">Priority 1 Map</label>
+                        <select id="map-priority-1" name="map1" class="form-select">
+                            <option value="">None</option>
+                            {{MAP_OPTIONS_1}}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="map-priority-2" class="form-label">Priority 2 Map</label>
+                        <select id="map-priority-2" name="map2" class="form-select">
+                            <option value="">None</option>
+                            {{MAP_OPTIONS_2}}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="map-priority-3" class="form-label">Priority 3 Map</label>
+                        <select id="map-priority-3" name="map3" class="form-select">
+                            <option value="">None</option>
+                            {{MAP_OPTIONS_3}}
+                        </select>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary mt-4">Save Map Priorities</button>
+            </form>
+        </div>
+
+        <!-- Killer Rules -->
+        <div class="card">
+            <h2 class="text-2xl font-bold mb-4">Killer-Specific Rules</h2>
+            
+            <div id="rules-list" class="mb-6">
+                {{EXISTING_RULES}}
+            </div>
+
+            <h3 class="text-xl font-bold mb-4 border-t border-gray-600 pt-4">Add New Rule</h3>
+            <form id="add-rule-form" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                <div>
+                    <label for="rule-role" class="form-label">Role</label>
+                    <select id="rule-role" class="form-select">
+                        <option value="Killer">Killer</option>
+                        <option value="Survivor">Survivor</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="rule-category" class="form-label">Category</label>
+                    <input type="text" id="rule-category" class="form-input" placeholder="e.g., Banned Addons">
+                </div>
+                <div class="md:col-span-3">
+                    <label for="rule-text" class="form-label">Rule Text</label>
+                    <textarea id="rule-text" class="form-textarea" rows="3" placeholder="Enter the rule description..."></textarea>
+                </div>
+                <div class="md:col-span-3">
+                    <button type="submit" class="btn btn-primary">Add Rule</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const killerId = '{{KILLER_ID}}';
+
+        // --- MAPS LOGIC ---
+        document.getElementById('map-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const mapPriorities = [
+                { map_id: formData.get('map1'), priority: 1 },
+                { map_id: formData.get('map2'), priority: 2 },
+                { map_id: formData.get('map3'), priority: 3 }
+            ].filter(m => m.map_id); // Filter out empty selections
+
+            try {
+                const response = await fetch(`/api/killers/${killerId}/maps`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ maps: mapPriorities })
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.message);
+                alert('Map priorities saved successfully!');
+            } catch (error) {
+                console.error('Error saving map priorities:', error);
+                alert(`Error: ${error.message}`);
+            }
+        });
+
+        // --- RULES LOGIC ---
+        const rulesList = document.getElementById('rules-list');
+
+        // Add new rule
+        document.getElementById('add-rule-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const newRule = {
+                role: document.getElementById('rule-role').value,
+                category: document.getElementById('rule-category').value,
+                rule_text: document.getElementById('rule-text').value
+            };
+
+            if (!newRule.category || !newRule.rule_text) {
+                alert('Category and Rule Text are required.');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/killers/${killerId}/rules`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newRule)
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.message);
+                
+                // Add to UI
+                addRuleToDOM(result.rule);
+                
+                // Reset form
+                e.target.reset();
+            } catch (error) {
+                console.error('Error adding rule:', error);
+                alert(`Error: ${error.message}`);
+            }
+        });
+
+        // Handle Update and Delete for existing rules
+        rulesList.addEventListener('click', async (e) => {
+            // Update logic
+            if (e.target.closest('.rule-item-form') && e.target.type === 'submit') {
+                e.preventDefault();
+                const form = e.target.closest('.rule-item-form');
+                const ruleId = form.dataset.ruleId;
+                const formData = new FormData(form);
+                const updatedRule = {
+                    role: formData.get('role'),
+                    category: formData.get('category'),
+                    rule_text: formData.get('rule_text')
+                };
+
+                try {
+                    const response = await fetch(`/api/killers/rules/${ruleId}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(updatedRule)
+                    });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.message);
+                    alert('Rule updated successfully!');
+                } catch (error) {
+                    console.error('Error updating rule:', error);
+                    alert(`Error: ${error.message}`);
+                }
+            }
+
+            // Delete logic
+            if (e.target.classList.contains('delete-rule-btn')) {
+                const ruleId = e.target.dataset.ruleId;
+                if (confirm('Are you sure you want to delete this rule?')) {
+                    try {
+                        const response = await fetch(`/api/killers/${killerId}/rules/${ruleId}`, {
+                            method: 'DELETE'
+                        });
+                        const result = await response.json();
+                        if (!response.ok) throw new Error(result.message);
+                        
+                        // Remove from UI
+                        e.target.closest('.rule-item-form').remove();
+                        alert('Rule deleted successfully!');
+                    } catch (error) {
+                        console.error('Error deleting rule:', error);
+                        alert(`Error: ${error.message}`);
+                    }
+                }
+            }
+        });
+
+        function addRuleToDOM(rule) {
+            const ruleDiv = document.createElement('div');
+            // The new rule is added as a form so it can be immediately edited/deleted
+            ruleDiv.innerHTML = `
+                <form class="rule-item-form" data-rule-id="${rule.rule_id}">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-center">
+                        <div>
+                            <label class="form-label text-sm">Role</label>
+                            <select name="role" class="form-select">
+                                <option value="Killer" ${rule.role === 'Killer' ? 'selected' : ''}>Killer</option>
+                                <option value="Survivor" ${rule.role === 'Survivor' ? 'selected' : ''}>Survivor</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label text-sm">Category</label>
+                            <input type="text" name="category" class="form-input" value="${rule.category}">
+                        </div>
+                        <div class="md:col-span-2">
+                            <label class="form-label text-sm">Rule Text</label>
+                            <textarea name="rule_text" class="form-textarea" rows="2">${rule.rule_text}</textarea>
+                        </div>
+                    </div>
+                    <div class="flex justify-end space-x-2 mt-2">
+                        <button type="submit" class="btn btn-primary btn-sm">Update</button>
+                        <button type="button" class="btn btn-danger btn-sm delete-rule-btn" data-rule-id="${rule.rule_id}">Delete</button>
+                    </div>
+                </form>
+            `;
+            rulesList.appendChild(ruleDiv);
+        }
+    </script>
+</body>
+</html>
