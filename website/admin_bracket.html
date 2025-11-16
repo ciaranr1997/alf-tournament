@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bracket Management</title>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jquery-bracket@0.11.1/dist/jquery.bracket.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jquery-bracket@0.11.1/dist/jquery.bracket.min.css" />
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.12.1/jquery-ui.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.12.1/jquery-ui.min.css" />
+
+    <style>
+        body { 
+            background-color: #111827; 
+            color: #ffffff; 
+            font-family: sans-serif; 
+            margin: 0; 
+            padding: 0; 
+            height: 100%; 
+            overflow-x: auto; 
+            text-align: center;
+            display: flex; /* Use flexbox for layout */
+            flex-direction: column;
+        }
+        h1 { text-align: center; font-size: 2.25rem; font-weight: bold; margin-bottom: 1.5rem; margin-top: 1rem; }
+        .error-message { text-align: center; color: #ef4444; font-size: 1.125rem; padding: 2rem; }
+
+        /* Layout for bracket and team list */
+        .main-content {
+            display: flex;
+            flex-grow: 1;
+            overflow: hidden; /* Hide overflow for flex children */
+        }
+
+        #available-teams-container {
+            width: 250px; /* Fixed width for team list */
+            background-color: #1f2937;
+            padding: 15px;
+            border-right: 1px solid #374151;
+            overflow-y: auto; /* Scroll for team list */
+            flex-shrink: 0; /* Prevent shrinking */
+        }
+
+        #available-teams-container h2 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            color: #e5e7eb;
+        }
+
+        .team-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .team-item {
+            background-color: #374151;
+            color: #ffffff;
+            padding: 10px;
+            margin-bottom: 8px;
+            border-radius: 5px;
+            cursor: grab;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-weight: bold;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .team-item.ui-draggable-dragging {
+            opacity: 0.7;
+            z-index: 1000;
+        }
+
+        .team-item img {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            margin-right: 10px;
+            object-fit: cover;
+        }
+
+        #bracket-wrapper {
+            flex-grow: 1; /* Bracket takes remaining space */
+            overflow-x: auto; /* Scroll for bracket */
+            padding: 20px;
+        }
+
+        /* Dark theme overrides from public_bracket.html */
+        .jQBracket .team {
+            background-color: #374151;
+            border: 1px solid #4b5563;
+            min-width: 150px; /* Ensure team boxes are wide enough */
+        }
+        .jQBracket .team .label {
+            color: #e5e7eb; /* Light text for dark background */
+            display: flex;
+            align-items: center;
+            justify-content: left;
+            height: 100%;
+            text-align: center;
+            padding: 0 5px;
+        }
+        .jQBracket .team .score {
+            background-color: #4b5563;
+            color: #e5e7eb;
+        }
+        .jQBracket .connector {
+            border-color: #4b5563;
+        }
+        .jQBracket .connector .connector {
+            border-color: #4b5563;
+        }
+        .jQBracket .team.win {
+            background-color: #4f46e5;
+            color: #ffffff;
+        }
+        .jQBracket .team.win .label {
+            color: #ffffff;
+        }
+        .jQBracket .team.lose {
+            background-color: #374151;
+        }
+        .jQBracket .team.lose .label {
+            color: #9ca3af;
+        }
+        .jQBracket .round-titles .title {
+            color: #e5e7eb;
+            font-weight: bold;
+        }
+        .jQBracket .team .label img {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        /* Highlight droppable areas */
+                .jQBracket .team.ui-droppable-hover {
+                    background-color: #6d28d9; /* Purple highlight */
+                    border-color: #a78bfa;
+                }
+                .manage-match-btn {
+                    background-color: #4f46e5;
+                    color: white;
+                    border: none;
+                    padding: 2px 8px;
+                    font-size: 0.75rem;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    margin-top: 4px;
+                }
+                .manage-match-btn:hover {
+                    background-color: #4338ca;
+                }
+                .ui-dialog {
+                    background-color: #1f2937;
+                    border: 1px solid #374151;
+                    color: #e5e7eb;
+                }
+                .ui-dialog .ui-dialog-titlebar {
+                    background-color: #374151;
+                    border-bottom: 1px solid #4b5563;
+                }
+                .ui-dialog .ui-dialog-title {
+                    color: #e5e7eb;
+                }
+                .ui-dialog .ui-dialog-titlebar-close {
+                    background: none;
+                    border: none;
+                }
+                .ui-dialog .ui-dialog-content {
+                    color: #e5e7eb;
+                }
+                #match-modal-content .team-info {
+                    display: flex;
+                    justify-content: space-around;
+                    margin-bottom: 20px;
+                    font-size: 1.2rem;
+                }
+                #match-modal-content .vs {
+                    font-weight: bold;
+                }
+                #start-pick-ban-btn {
+                    background-color: #16a34a;
+                    color: white;
+                    padding: 10px 20px;
+                    border-radius: 5px;
+                    border: none;
+                    cursor: pointer;
+                    display: block;
+                    margin: 0 auto;
+                }
+                #start-pick-ban-btn:disabled {
+                    background-color: #4b5563;
+                    cursor: not-allowed;
+                }
+            </style>
+        </head>
+        <body>
+            <h1>Tournament Bracket (Admin View)</h1>
+            <div class="controls" style="margin-bottom: 20px;">
+                <button id="reset-bracket-btn" style="background-color: #dc2626; color: white; padding: 10px 20px; border-radius: 5px; border: none; cursor: pointer; margin-right: 10px;">Reset Bracket</button>
+                <button id="save-bracket-btn" style="background-color: #22c55e; color: white; padding: 10px 20px; border-radius: 5px; border: none; cursor: pointer;">Save (Refresh)</button>
+            </div>
+            <div class="main-content">
+                <div id="available-teams-container">
+                    <h2>Available Teams</h2>
+                    <ul id="team-list" class="team-list">
+                        </ul>
+                </div>
+                <div id="bracket-wrapper">
+                    <div id="bracket-container" style="overflow-x: auto; display: inline-block; text-align: left; max-width: 100%; box-sizing: border-box;"></div>
+                </div>
+            </div>
+        
+            <div id="match-modal" title="Manage Match">
+                <div id="match-modal-content"></div>
+            </div>
+        
+            <script>
+                $(document).ready(function() {
+                    const bracketContainer = $('#bracket-container');
+                    const teamListContainer = $('#team-list');
+                    const matchModal = $('#match-modal');
+                    
+                    // Extract tournamentId from the URL
+                    const pathSegments = window.location.pathname.split('/');
+                    const tournamentId = pathSegments[pathSegments.length - 1];
+        
+                    let allMatches = []; // Global variable to store all matches for mapping
+                    let teamPositions = new Map(); // Global map to store teamId -> { matchId, slot, $element }
+        
+                    if (!$.fn.bracket) {
+                        console.error('Fatal Error: jquery-bracket did not load correctly.');
+                        bracketContainer.html(`<p class="error-message">Could not load the bracket library.</p>`);
+                        return;
+                    }
+                    if (!$.ui || !$.ui.draggable || !$.ui.droppable) {
+                        console.error('Fatal Error: jQuery UI did not load correctly.');
+                        bracketContainer.html(`<p class="error-message">Could not load jQuery UI for drag and drop.</p>`);
+                        return;
+                    }
+        
+                    const bracketOptions = {
+                        init: { teams: [], results: [] }, // Initialize with empty data
+                        skipConsolationRound: true,
+                        teamWidth: 200,
+                        matchMargin: 50,
+                        roundMargin: 50,
+                        // --- START: MODIFIED RENDER FUNCTION ---
+                        render: function(container, data, score, state) {
+                            const teamName = data.name || 'TBD';
+                            const teamLogo = data.logo || '/public/shield-icon.svg'; // Default logo
+        
+                            const $teamDiv = $('<div></div>').addClass('label');
+                            
+                            // Always append the image. 
+                            // teamLogo will correctly be the shield icon if data is null.
+                            $teamDiv.append(`<img src="${teamLogo}" alt="${teamName} logo">`);
+                            $teamDiv.append(`<span>${teamName}</span>`);
+                            
+                            return $teamDiv;
+                        }
+                        // --- END: MODIFIED RENDER FUNCTION ---
+                    };
+        
+                    async function loadTeamsAndBracket() {
+                        try {
+                            // Fetch all matches for mapping
+                            const matchesResponse = await $.get(`/api/tournament/${tournamentId}/matches`);
+                            allMatches = matchesResponse;
+        
+                            // Fetch available teams
+                            const teams = await $.get(`/api/admin/tournaments/${tournamentId}/teams`);
+                            teamListContainer.empty();
+                            if (teams.length === 0) {
+                                teamListContainer.append('<li class="text-gray-400">No teams available for this tournament.</li>');
+                            } else {
+                                teams.forEach(function(team) {
+                                    const teamItem = $(`
+                                        <li class="team-item" data-team-id="${team.team_id}" data-team-name="${team.team_name}" data-team-logo="${team.logo_url || '/public/shield-icon.svg'}">
+                                            <img src="${team.logo_url || '/public/shield-icon.svg'}" alt="${team.team_name} logo">
+                                            <span>${team.team_name}</span>
+                                        </li>
+                                    `);
+                                    teamItem.draggable({
+                                        helper: 'clone',
+                                        revert: 'invalid',
+                                        cursor: 'grab',
+                                        appendTo: 'body',
+                                        zIndex: 100
+                                    });
+                                    teamListContainer.append(teamItem);
+                                });
+                            }
+        
+                            // Create an empty 16-team (8-match) structure
+                            const emptyTeams = [
+                                [null, null], [null, null], [null, null], [null, null],
+                                [null, null], [null, null], [null, null], [null, null]
+                            ];
+        
+                            // Initialize bracket with the 16-team structure
+                            bracketOptions.init = { teams: emptyTeams, results: [] };
+                            bracketContainer.bracket(bracketOptions);
+        
+                            addRoundTitles(4); // Always 4 rounds for a 16-team bracket
+                            addMatchIdsToBracketElements(allMatches); // Pass allMatches to map IDs
+                            makeBracketSlotsDroppable(); // Make slots droppable after IDs are set
+                            
+                            updateBracketDisplayWithAssignedTeams(allMatches); // Manually update display with assigned teams
+                            populateTeamPositions(); // Populate teamPositions map after bracket is rendered and IDs are set
+                        
+                        } catch (error) {
+                            console.error('Error loading data:', error);
+                            bracketContainer.html(`<p class="error-message">Error loading tournament data.</p>`);
+                        }
+                    }
+        
+                    function updateBracketDisplayWithAssignedTeams(matchesData) {
+                        matchesData.forEach(match => {
+                            // Select the match container first
+                            const $matchContainer = $(`.match[data-match-id="${match.match_id}"]`);
+                            if ($matchContainer.length > 0) {
+                                
+                                // --- Handle Team A ---
+                                const $teamA_label = $matchContainer.find('.team[data-slot="A"] .label');
+                                if ($teamA_label.length > 0) {
+                                    $teamA_label.empty(); // Clear existing TBD content
+                                    if (match.team_a_id) {
+                                        // Find the team details from the draggable list
+                                        const $teamItem = teamListContainer.find(`[data-team-id="${match.team_a_id}"]`);
+                                        const teamName = $teamItem.data('team-name') || 'Team ?'; // Fallback
+                                        const teamLogo = $teamItem.data('team-logo') || '/public/shield-icon.svg'; // Fallback
+                                        
+                                        $teamA_label.append(`<img src="${teamLogo}" alt="${teamName} logo"><span>${teamName}</span>`);
+                                    } else {
+                                        $teamA_label.append(`<img src="/public/shield-icon.svg" alt="TBD logo"><span>TBD</span>`);
+                                    }
+                                }
+        
+                                // --- Handle Team B ---
+                                const $teamB_label = $matchContainer.find('.team[data-slot="B"] .label');
+                                if ($teamB_label.length > 0) {
+                                    $teamB_label.empty(); // Clear existing TBD content
+                                    if (match.team_b_id) {
+                                         // Find the team details from the draggable list
+                                        const $teamItem = teamListContainer.find(`[data-team-id="${match.team_b_id}"]`);
+                                        const teamName = $teamItem.data('team-name') || 'Team ?'; // Fallback
+                                        const teamLogo = $teamItem.data('team-logo') || '/public/shield-icon.svg'; // Fallback
+        
+                                        $teamB_label.append(`<img src="${teamLogo}" alt="${teamName} logo"><span>${teamName}</span>`);
+                                    } else {
+                                        $teamB_label.append(`<img src="/public/shield-icon.svg" alt="TBD logo"><span>TBD</span>`);
+                                    }
+                                }
+                            }
+                        });
+                    }
+        
+                    function populateTeamPositions() {
+                        teamPositions.clear(); // Clear existing positions
+                        
+                        // Use the allMatches data as the source of truth
+                        allMatches.forEach(match => {
+                            if (match.team_a_id) {
+                                // Find the DOM element for this slot
+                                const $teamElement = $(`[data-match-id="${match.match_id}"][data-slot="A"]`);
+                                if ($teamElement.length > 0) {
+                                    teamPositions.set(match.team_a_id, { 
+                                        matchId: match.match_id, 
+                                        slot: 'A', 
+                                        $element: $teamElement.find('.label') 
+                                    });
+                                }
+                            }
+                            if (match.team_b_id) {
+                                 // Find the DOM element for this slot
+                                const $teamElement = $(`[data-match-id="${match.match_id}"][data-slot="B"]`);
+                                if ($teamElement.length > 0) {
+                                    teamPositions.set(match.team_b_id, { 
+                                        matchId: match.match_id, 
+                                        slot: 'B', 
+                                        $element: $teamElement.find('.label') 
+                                    });
+                                }
+                            }
+                        });
+                    }
+        
+                    function addRoundTitles(roundCount) {
+                        const titles = ['Round 1', 'Quarterfinals', 'Semifinals', 'Finals'];
+                        // Ensure titles aren't added twice on refresh
+                        $('#bracket-container .round-titles').remove(); 
+                        
+                        const $titles = $('<div class="round-titles"></div>').css({ 'display': 'flex', 'margin-bottom': '20px' });
+                        const $firstRound = $('#bracket-container .jQBracket .round:first-child');
+                        
+                        if ($firstRound.length > 0 && $firstRound.position()) {
+                            // Calculate padding based on the first round's position
+                            $titles.css('padding-left', `${$firstRound.position().left}px`);
+                        }
+        
+                        for (let i = 0; i < roundCount; i++) {
+                            let $title = $('<div></div>').addClass('title').text(titles[i] || `Round ${i+1}`).css({ 
+                                'text-align': 'center', 
+                                'flex-grow': 0, 
+                                'flex-shrink': 0,
+                                'width': `${bracketOptions.teamWidth}px`
+                            });
+        
+                            if (i < roundCount - 1) {
+                                 // Add margin to align with bracket connectors
+                                $title.css('margin-right', `${bracketOptions.matchMargin + bracketOptions.roundMargin}px`);
+                            }
+                            $titles.append($title);
+                        }
+                        $('#bracket-container').prepend($titles);
+                    }
+        
+                    // Function to add match IDs to the DOM elements for droppable identification
+                    function addMatchIdsToBracketElements(matchesData) {
+                        const rounds = $('#bracket-container .jQBracket .round');
+                        let matchIndexCounter = 0; // To keep track of the overall match index
+        
+                        rounds.each(function(roundIndex) {
+                            $(this).find('.match').each(function(matchInRoundIndex) {
+                                // Find the corresponding match from matchesData based on its sequential order
+                                const match = matchesData[matchIndexCounter];
+                                if (match) {
+                                    // Apply the match_id to the match container itself
+                                    $(this).attr('data-match-id', match.match_id); 
+                                    
+                                    $(this).find('.team').each(function(teamSlotIndex) {
+                                        const slot = teamSlotIndex === 0 ? 'A' : 'B';
+                                        // Also apply match_id and slot to the team element for easier selection
+                                        $(this).attr('data-match-id', match.match_id); 
+                                        $(this).attr('data-slot', slot);
+                                    });
+        
+                                }
+                                matchIndexCounter++;
+                            });
+                        });
+                    }
+        
+                    function makeBracketSlotsDroppable() {
+                        $('#bracket-container .jQBracket .team .label').droppable({
+                            accept: '.team-item',
+                            hoverClass: 'ui-droppable-hover',
+                            drop: function(event, ui) {
+                                const droppedTeamId = ui.draggable.data('team-id');
+                                const droppedTeamName = ui.draggable.data('team-name');
+                                const droppedTeamLogo = ui.draggable.data('team-logo');
+                                
+                                const $teamElement = $(this).closest('.team');
+                                const matchId = $teamElement.data('match-id');
+                                const slot = $teamElement.data('slot');
+        
+                                if (matchId && droppedTeamId && slot) {
+                                    assignTeamToMatch(matchId, droppedTeamId, slot, droppedTeamName, droppedTeamLogo, $(this));
+                                } else {
+                                    console.error('Could not identify matchId, droppedTeamId, or slot.', {matchId, droppedTeamId, slot});
+                                }
+                            }
+                        });
+                    }
+        
+                    async function assignTeamToMatch(matchId, teamId, slot, teamName, teamLogo, $droppableElement) {
+                        // Check if the team is already in another slot
+                        if (teamPositions.has(teamId)) {
+                            const oldPosition = teamPositions.get(teamId);
+                            
+                            // Check if dropping onto the same slot
+                            if (oldPosition.matchId === matchId && oldPosition.slot === slot) {
+                                return; // Do nothing if it's the same slot
+                            }
+                            
+                            // Clear the old slot visually
+                            oldPosition.$element.empty();
+                            oldPosition.$element.append(`<img src="/public/shield-icon.svg" alt="TBD logo"><span>TBD</span>`);
+                            
+                            // Clear the old slot in the database
+                            await $.ajax({
+                                url: `/api/admin/matches/${oldPosition.matchId}/assign-team`,
+                                type: 'PUT',
+                                contentType: 'application/json',
+                                data: JSON.stringify({ teamId: null, slot: oldPosition.slot }),
+                                error: function(jqXHR, textStatus, errorThrown) {
+                                    console.error('Error clearing old team assignment:', textStatus, errorThrown);
+                                    alert('Failed to clear old team assignment: ' + (jqXHR.responseJSON ? jqXHR.responseJSON.message : errorThrown));
+                                }
+                            });
+                            teamPositions.delete(teamId); // Remove from map
+                        }
+        
+                        // Assign the new team
+                        $.ajax({
+                            url: `/api/admin/matches/${matchId}/assign-team`,
+                            type: 'PUT',
+                            contentType: 'application/json',
+                            data: JSON.stringify({ teamId: teamId, slot: slot }),
+                            success: function(response) {
+                                console.log(response.message);
+                                // Update the UI to reflect the new change
+                                $droppableElement.empty();
+                                $droppableElement.append(`<img src="${teamLogo}" alt="${teamName} logo"><span>${teamName}</span>`);
+                                
+                                // Update teamPositions map with the new position
+                                teamPositions.set(teamId, { matchId: matchId, slot: slot, $element: $droppableElement });
+                            },
+                            error: function(jqXHR, textStatus, errorThrown) {
+                                console.error('Error assigning team:', textStatus, errorThrown);
+                                alert('Failed to assign team: ' + (jqXHR.responseJSON ? jqXHR.responseJSON.message : errorThrown));
+                                // Re-load to revert to last saved state
+                                loadTeamsAndBracket(); 
+                            }
+                        });
+                    }
+        
+                    // --- Control Functions ---
+                    $('#reset-bracket-btn').on('click', async function() {
+                        if (confirm('Are you sure you want to clear all team assignments for this bracket? This action cannot be undone.')) {
+                            try {
+                                await $.ajax({
+                                    url: `/api/admin/tournaments/${tournamentId}/matches/teams`,
+                                    type: 'DELETE',
+                                    contentType: 'application/json'
+                                });
+                                alert('Bracket cleared successfully!');
+                                loadTeamsAndBracket(); // Re-load the bracket to show cleared state
+                            } catch (error) {
+                                console.error('Error resetting bracket:', error);
+                                alert('Failed to reset bracket: ' + (error.responseJSON ? error.responseJSON.message : error.statusText));
+                            }
+                        }
+                    });
+        
+                    $('#save-bracket-btn').on('click', function() {
+                        alert('Bracket state refreshed from database.');
+                        loadTeamsAndBracket(); // Re-load the bracket to ensure UI is in sync with DB
+                    });
+        
+                    // --- Modal Logic ---
+                    matchModal.dialog({
+                        autoOpen: false,
+                        modal: true,
+                        width: 500,
+                        resizable: false
+                    });
+        
+
+                    loadTeamsAndBracket();
+                });
+            </script>
+        </body>
+        </html>
+        

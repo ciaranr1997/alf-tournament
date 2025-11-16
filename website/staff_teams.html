@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Staff Panel - Manage Teams</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #1f2937; color: #f9fafb; }
+        .card { background-color: #374151; padding: 2rem; border-radius: 0.5rem; }
+        .nice-colors {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .color-box {
+            width: 30px;
+            height: 30px;
+            cursor: pointer;
+            border: 2px solid transparent;
+        }
+        .color-box.selected {
+            border-color: #fff;
+        }
+        .custom-select-container {
+            position: relative;
+        }
+        .custom-select {
+            background-color: #4a5568;
+            padding: 0.5rem;
+            border-radius: 0.25rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .custom-select-options {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background-color: #4a5568;
+            border-radius: 0.25rem;
+            margin-top: 0.25rem;
+            display: none;
+            z-index: 10;
+        }
+        .custom-select-option {
+            padding: 0.5rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+        }
+        .custom-select-option:hover {
+            background-color: #2d3748;
+        }
+        .captain-avatar {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mx-auto p-4">
+        <div class="card">
+            <h1 class="text-2xl font-bold mb-4">Manage Teams</h1>
+            
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div>
+                    <h2 class="text-xl font-bold mb-4">Create New Team</h2>
+                    <form id="create-team-form">
+                        <div class="mb-4">
+                            <label for="team-name" class="block mb-2">Team Name</label>
+                            <input type="text" id="team-name" name="teamName" class="w-full p-2 rounded bg-gray-600 border border-gray-500" required>
+                        </div>
+                        <div class="mb-4">
+                            <label class="block mb-2">Select Captain</label>
+                            <div class="custom-select-container">
+                                <div class="custom-select bg-gray-600 border border-gray-500">
+                                    <div id="selected-captain" class="flex items-center">Select a captain</div>
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                                </div>
+                                <div id="captain-options-wrapper" class="custom-select-options">
+                                    <input type="text" id="captain-search" class="w-full p-2 bg-gray-700 border-b border-gray-500" placeholder="Search for a user...">
+                                    <div id="captain-options">
+                                        <!-- Captains will be populated here -->
+                                    </div>
+                                </div>
+                            </div>
+                            <input type="hidden" id="captain-id" name="captainId" required>
+                        </div>
+                        <div class="mb-4">
+                            <label class="block mb-2">Role Color</label>
+                            <div id="color-picker" class="nice-colors">
+                                <!-- Color options will be populated here -->
+                            </div>
+                            <input type="hidden" id="role-color" name="roleColor" required>
+                        </div>
+                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded">
+                            Create Team
+                        </button>
+                    </form>
+                </div>
+                <div>
+                    <h2 class="text-xl font-bold mb-4">Existing Teams</h2>
+                    <div id="existing-teams" class="grid grid-cols-1 gap-4">
+                        <!-- Existing teams will be listed here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const niceColors = [
+            '#FF6B6B', '#FFD93D', '#6BCB77', '#4D96FF', '#9B59B6', '#F7A072',
+            '#3498DB', '#2ECC71', '#F1C40F', '#E74C3C', '#1ABC9C', '#E67E22',
+            '#54A0FF', '#576574', '#222F3E', '#FECA57', '#AEC6CF', '#B39EB5',
+            '#FFDAB9', '#C1E1C1'
+        ];
+
+        const colorPicker = document.getElementById('color-picker');
+        const roleColorInput = document.getElementById('role-color');
+
+        let allUsers = [];
+        let existingCaptainIds = new Set();
+        let inUseColors = new Set(); // Store colors currently in use by teams
+
+        async function fetchUsersAndCaptains() {
+            const [usersResponse, teamsResponse] = await Promise.all([
+                fetch('/api/staff/users'),
+                fetch('/api/staff/teams')
+            ]);
+
+            if (usersResponse.ok) {
+                allUsers = await usersResponse.json();
+            }
+
+            if (teamsResponse.ok) {
+                const teams = await teamsResponse.json();
+                existingCaptainIds.clear(); // Clear previous captains
+                inUseColors.clear(); // Clear previous colors
+                
+                const colorPromises = [];
+
+                teams.forEach(team => {
+                    if (team.captain_id) {
+                        existingCaptainIds.add(team.captain_id);
+                    }
+                    if (team.role_id) {
+                        colorPromises.push(
+                            fetch(`/api/discord/role/${team.role_id}`)
+                                .then(res => res.json())
+                                .then(role => {
+                                    if (role.color) {
+                                        inUseColors.add(role.color);
+                                    }
+                                })
+                                .catch(error => console.error(`Error fetching role color for ${team.role_id}:`, error))
+                        );
+                    }
+                });
+                await Promise.all(colorPromises);
+            }
+            
+            const availableUsers = allUsers.filter(user => !existingCaptainIds.has(user.id));
+            renderUsers(availableUsers);
+            renderColorPicker(); // Re-render color picker with updated inUseColors
+        }
+
+        function renderColorPicker() {
+            colorPicker.innerHTML = ''; // Clear existing color boxes
+            niceColors.forEach(color => {
+                const colorBox = document.createElement('div');
+                colorBox.classList.add('color-box');
+                colorBox.style.backgroundColor = color;
+                colorBox.dataset.color = color;
+
+                if (!inUseColors.has(color)) {
+                    colorBox.addEventListener('click', () => {
+                        document.querySelectorAll('.color-box').forEach(box => box.classList.remove('selected'));
+                        colorBox.classList.add('selected');
+                        roleColorInput.value = color;
+                    });
+                } else {
+                    colorBox.classList.add('in-use');
+                    colorBox.title = 'This color is already in use by another team.';
+                    colorBox.style.opacity = '0.5';
+                    colorBox.style.cursor = 'not-allowed';
+                }
+                colorPicker.appendChild(colorBox);
+            });
+
+            // Select the first available color if none is selected
+            const selectedBox = document.querySelector('.color-box.selected');
+            if (!selectedBox) {
+                const firstAvailable = document.querySelector('.color-box:not(.in-use)');
+                if (firstAvailable) {
+                    firstAvailable.click();
+                } else {
+                    roleColorInput.value = ''; // No available colors
+                }
+            }
+        }
+
+        // Initial render of color picker (before fetching in-use colors)
+        renderColorPicker();
+
+        const customSelect = document.querySelector('.custom-select');
+        const captainOptions = document.getElementById('captain-options');
+        const selectedCaptain = document.getElementById('selected-captain');
+        const captainIdInput = document.getElementById('captain-id');
+
+        const captainOptionsWrapper = document.getElementById('captain-options-wrapper');
+        const captainSearch = document.getElementById('captain-search');
+
+        customSelect.addEventListener('click', () => {
+            captainOptionsWrapper.style.display = captainOptionsWrapper.style.display === 'block' ? 'none' : 'block';
+            if (captainOptionsWrapper.style.display === 'block') {
+                captainSearch.focus();
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!customSelect.parentElement.contains(e.target)) {
+                captainOptionsWrapper.style.display = 'none';
+            }
+        });
+
+        function renderUsers(users) {
+            captainOptions.innerHTML = '';
+            users.forEach(user => {
+                const option = document.createElement('div');
+                option.classList.add('custom-select-option');
+                option.dataset.id = user.id;
+                option.innerHTML = `
+                    <img src="${user.avatar}" class="captain-avatar">
+                    <span>${user.nickname} (${user.username})</span>
+                `;
+                option.addEventListener('click', () => {
+                    selectedCaptain.innerHTML = `
+                        <img src="${user.avatar}" class="captain-avatar">
+                        <span>${user.nickname} (${user.username})</span>
+                    `;
+                    captainIdInput.value = user.id;
+                    captainOptionsWrapper.style.display = 'none';
+                });
+                captainOptions.appendChild(option);
+            });
+        }
+
+        captainSearch.addEventListener('input', () => {
+            const searchTerm = captainSearch.value.toLowerCase();
+            const filteredUsers = allUsers.filter(user =>
+                user.nickname.toLowerCase().includes(searchTerm) ||
+                user.username.toLowerCase().includes(searchTerm)
+            );
+            renderUsers(filteredUsers);
+        });
+
+        async function fetchTeams() {
+            const response = await fetch('/api/staff/teams');
+            const teams = await response.json();
+            const teamsContainer = document.getElementById('existing-teams');
+            teamsContainer.innerHTML = '';
+            if (teams.length === 0) {
+                teamsContainer.innerHTML = '<p>No teams yet.</p>';
+            } else {
+                teams.forEach(team => {
+                    const teamElement = document.createElement('div');
+                    teamElement.className = 'flex items-center justify-between p-4 bg-gray-700 rounded mb-2';
+
+                    const logoAndName = document.createElement('div');
+                    logoAndName.className = 'flex items-center flex-grow';
+
+                    if (team.logo_url) {
+                        const logo = document.createElement('img');
+                        logo.src = team.logo_url;
+                        logo.alt = team.team_name + ' Logo';
+                        logo.className = 'w-10 h-10 rounded-full mr-4';
+                        logoAndName.appendChild(logo);
+                    }
+
+                    const teamLink = document.createElement('a');
+                    teamLink.href = `/staff/teams/edit/${team.team_id}`;
+                    teamLink.textContent = team.team_name;
+                    teamLink.className = 'font-bold';
+                    logoAndName.appendChild(teamLink);
+
+                    // Fetch and apply role color
+                    if (team.role_id) {
+                        fetch(`/api/discord/role/${team.role_id}`)
+                            .then(res => res.json())
+                            .then(role => {
+                                if (role.color) {
+                                    teamLink.style.color = role.color;
+                                }
+                            })
+                            .catch(error => console.error(`Error fetching role color for ${team.role_id}:`, error));
+                    }
+
+                    const buttons = document.createElement('div');
+                    buttons.className = 'flex items-center';
+
+                    const editButton = document.createElement('a');
+                    editButton.href = `/staff/teams/edit/${team.team_id}`;
+                    editButton.textContent = 'Edit';
+                    editButton.className = 'bg-blue-600 hover:bg-blue-700 text-white font-bold py-1 px-2 rounded mr-2';
+                    buttons.appendChild(editButton);
+
+                    const deleteButton = document.createElement('button');
+                    deleteButton.textContent = 'Delete';
+                    deleteButton.className = 'bg-red-600 hover:bg-red-700 text-white font-bold py-1 px-2 rounded';
+                    deleteButton.onclick = async () => {
+                        if (confirm(`Are you sure you want to delete the team "${team.team_name}"?`)) {
+                            const deleteResponse = await fetch(`/api/staff/teams/${team.team_id}`, {
+                                method: 'DELETE'
+                            });
+                            const result = await deleteResponse.json();
+                            alert(result.message);
+                            if (deleteResponse.ok) {
+                                fetchTeams(); // Refresh the list
+                            }
+                        }
+                    };
+                    buttons.appendChild(deleteButton);
+
+                    teamElement.appendChild(logoAndName);
+                    teamElement.appendChild(buttons);
+                    teamsContainer.appendChild(teamElement);
+                });
+            }
+        }
+
+        fetchUsersAndCaptains();
+        fetchTeams();
+
+        document.getElementById('create-team-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const formData = new FormData(form);
+            const data = Object.fromEntries(formData.entries());
+
+            const response = await fetch('/api/staff/create-team', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+
+            const result = await response.json();
+            alert(result.message);
+            if (response.ok) {
+                form.reset();
+                colorPicker.children[0].click();
+                selectedCaptain.innerHTML = 'Select a captain';
+                captainIdInput.value = '';
+                fetchTeams(); // Refresh the list
+            }
+        });
+    </script>
+</body>
+</html>

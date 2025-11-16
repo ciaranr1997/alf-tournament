@@ -1,0 +1,40 @@
+services:
+  alf-tournament:
+    build: .
+    container_name: alf-tournament
+    restart: always
+    ports:
+      - "8080:3000" # Host:Container
+    volumes:
+      # Mounts your code, but blocks your local node_modules
+      - ./website:/usr/src/app
+      - node_modules:/usr/src/app/node_modules
+    networks:
+      - monitoring_monitoring_net
+    env_file:
+      - .env
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    container_name: alf-tournament-redis
+    volumes:
+      - redis_data:/data
+    expose:
+      - 6379
+    restart: always
+    networks: # <-- FIX 1: Add this network
+      - monitoring_monitoring_net
+
+networks:
+  monitoring_monitoring_net:
+    external: true
+
+volumes:
+  redis_data:
+    driver: local
+  
+  # FIX 2: Define the anonymous volume used to block node_modules
+  # (This is technically not required, but good practice)
+  node_modules:

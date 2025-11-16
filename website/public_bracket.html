@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tournament Bracket</title>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jquery-bracket@0.11.1/dist/jquery.bracket.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jquery-bracket@0.11.1/dist/jquery.bracket.min.css" />
+
+    <style>
+        body { 
+            background-color: #111827; 
+            color: #ffffff; 
+            font-family: sans-serif; 
+            margin: 0; 
+            padding: 0; 
+            height: 100%; 
+            overflow-x: auto; 
+            text-align: center;
+        }
+        h1 { text-align: center; font-size: 2.25rem; font-weight: bold; margin-bottom: 1.5rem; margin-top: 1rem; }
+        .error-message { text-align: center; color: #ef4444; font-size: 1.125rem; padding: 2rem; }
+        .info-message { text-align: center; color: #60a5fa; font-size: 1.125rem; padding: 2rem; }
+
+        #bracket-wrapper {
+            overflow-x: auto;
+            padding: 20px;
+            display: inline-block;
+            text-align: left;
+        }
+
+        .jQBracket .team {
+            background-color: #374151;
+            border: 1px solid #4b5563;
+            min-width: 150px;
+        }
+        .jQBracket .team .label {
+            color: black;
+            display: flex;
+            align-items: center;
+            justify-content: left;
+            height: 100%;
+            text-align: center;
+            padding: 0 5px;
+        }
+        .jQBracket .team .score {
+            background-color: #4b5563;
+            color: #e5e7eb;
+        }
+        .jQBracket .connector {
+            border-color: #4b5563;
+        }
+        .jQBracket .connector .connector {
+            border-color: #4b5563;
+        }
+        .jQBracket .team.win {
+            background-color: #4f46e5;
+            color: #ffffff;
+        }
+        .jQBracket .team.win .label {
+            color: #ffffff;
+        }
+        .jQBracket .team.lose {
+            background-color: #374151;
+        }
+        .jQBracket .team.lose .label {
+            color: #9ca3af;
+        }
+        .jQBracket .round-titles .title {
+            color: #e5e7eb;
+            font-weight: bold;
+        }
+        /* This style is now applied by the patchBracketWithLogos function */
+        /* .jQBracket .team .label img { ... } */
+    </style>
+</head>
+<body>
+    <h1>Tournament Bracket</h1>
+    <div id="bracket-wrapper">
+        <div id="bracket-container" style="max-width: 100%;"></div>
+    </div>
+
+    <script>
+        $(document).ready(function() {
+            const bracketContainer = $('#bracket-container');
+
+            if (!$.fn.bracket) {
+                console.error('Fatal Error: jquery-bracket did not load correctly.');
+                bracketContainer.html(`<p class="error-message">Could not load the bracket library.</p>`);
+                return;
+            }
+
+            // --- We removed the custom 'render' function ---
+            const bracketOptions = {
+                init: { teams: [], results: [] },
+                skipConsolationRound: true,
+                teamWidth: 200,
+                matchMargin: 50,
+                roundMargin: 50
+            };
+
+            async function loadInitialData() {
+                try {
+                    const activeTournament = await $.get('/api/tournaments/active');
+                    const tournamentId = activeTournament.tournament_id;
+
+                    if (!tournamentId) {
+                        bracketContainer.html('<p class="info-message">There is no active tournament at the moment.</p>');
+                        return;
+                    }
+
+                    await loadBracketData(tournamentId);
+
+                } catch (error) {
+                    console.error('Error loading initial data:', error);
+                    bracketContainer.html(`<p class="error-message">Error finding the active tournament.</p>`);
+                }
+            }
+
+            async function loadBracketData(tournamentId) {
+                try {
+                    const bracketData = await $.get(`/api/tournament/${tournamentId}/bracket-data-jq`);
+
+                    if (!bracketData || !bracketData.teams || bracketData.teams.length === 0) {
+                        bracketContainer.html('<p class="info-message">Bracket has not been set up...</p>');
+                        return;
+                    }
+
+                    // 1. UNWRAP THE RESULTS (This fixes the data bug)
+                    bracketData.results = bracketData.results[0]; 
+
+                    // 2. CREATE LOGO MAP & TRANSFORM TEAMS
+                    const logoMap = new Map();
+                    const teamsForPlugin = bracketData.teams.map(match => {
+                        const teamA = match[0];
+                        const teamB = match[1];
+
+                        // Save the logo URL for each team name
+                        if (teamA && teamA.name) {
+                            logoMap.set(teamA.name, teamA.logo || '/public/shield-icon.svg');
+                        }
+                        if (teamB && teamB.name) {
+                            logoMap.set(teamB.name, teamB.logo || '/public/shield-icon.svg');
+                        }
+
+                        // Return *only* the names for the plugin
+                        return [
+                            (teamA ? teamA.name : null),
+                            (teamB ? teamB.name : null)
+                        ];
+                    });
+
+                    // 3. INITIALIZE BRACKET with simple string names
+                    bracketOptions.init = {
+                        teams: teamsForPlugin,
+                        results: bracketData.results
+                    };
+                    bracketContainer.bracket(bracketOptions);
+
+                    // 4. RUN THE "PATCH"
+                    patchBracketWithLogos(logoMap);
+                    
+                    // 5. ADD TITLES
+                    addRoundTitles(bracketData.results.length);
+
+                } catch (error) {
+                    console.error('Error loading bracket data:', error);
+                    bracketContainer.html(`<p class="error-message">Error loading tournament data.</p>`);
+                }
+            }
+
+            // --- NEW "PATCH" FUNCTION ---
+            function patchBracketWithLogos(logoMap) {
+                // Find every team label the plugin created
+                $('#bracket-container .jQBracket .team .label').each(function() {
+                    const $label = $(this);
+                    const teamName = $label.text();
+
+                    // Skip labels that are already patched (e.g. if script ran twice)
+                    if ($label.find('img').length > 0) {
+                        return;
+                    }
+
+                    let logoUrl = '/public/shield-icon.svg'; // Default shield
+                    let altText = 'Team logo';
+
+                    // Check if the team name is in our map
+                    if (teamName && teamName !== 'TBD' && logoMap.has(teamName)) {
+                        logoUrl = logoMap.get(teamName);
+                        altText = teamName + ' logo';
+                    }
+                    else if (teamName === 'BYE'|| teamName === null||teamName === "TBD") {
+                        // Don't add a logo for BYE
+                        return;
+                    }
+
+                    // Create the logo image element
+                    const $img = $('<img>').attr('src', logoUrl).attr('alt', altText);
+
+                    // Apply styles from your CSS file
+                    $img.css({
+                        'width': '24px',
+                        'height': '24px',
+                        'border-radius': '50%',
+                        'margin-right': '8px'
+                    });
+
+                    // "Patch" the HTML by prepending the image
+                    $label.prepend($img);
+                });
+            }
+
+            function addRoundTitles(roundCount) {
+                const titles = ['Round 1', 'Quarterfinals', 'Semifinals', 'Finals', 'Winner'];
+                $('#bracket-container .round-titles').remove(); 
+                
+                const $titles = $('<div class="round-titles"></div>').css({ 'display': 'flex', 'margin-bottom': '20px' });
+                const $firstRound = $('#bracket-container .jQBracket .round:first-child');
+                
+                if ($firstRound.length > 0 && $firstRound.position()) {
+                    $titles.css('padding-left', `${$firstRound.position().left}px`);
+                }
+
+                for (let i = 0; i < roundCount; i++) {
+                    let $title = $('<div></div>').addClass('title').text(titles[i] || `Round ${i+1}`).css({ 
+                        'text-align': 'center', 
+                        'flex-grow': 0, 
+                        'flex-shrink': 0,
+                        'width': `${bracketOptions.teamWidth}px`
+                    });
+
+                    if (i < roundCount - 1) {
+                        $title.css('margin-right', `${bracketOptions.matchMargin + bracketOptions.roundMargin}px`);
+                    }
+                    $titles.append($title);
+                }
+                $('#bracket-container').prepend($titles);
+            }
+
+            loadInitialData();
+        });
+    </script>
+</body>
+</html>

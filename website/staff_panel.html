@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Staff Panel - Manage Teams</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #1f2937; color: #f9fafb; }
+        .card { background-color: #374151; padding: 2rem; border-radius: 0.5rem; }
+        .nice-colors {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .color-box {
+            width: 30px;
+            height: 30px;
+            cursor: pointer;
+            border: 2px solid transparent;
+        }
+        .color-box.selected {
+            border-color: #fff;
+        }
+        .captain-option {
+            display: flex;
+            align-items: center;
+        }
+        .captain-avatar {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mx-auto p-4">
+        <div class="card">
+            <h1 class="text-2xl font-bold mb-4">Manage Teams</h1>
+            <div id="content">{{CONTENT}}</div>
+
+            <form id="create-team-form" class="mt-8">
+                <h2 class="text-xl font-bold mb-4">Create New Team</h2>
+                <div class="mb-4">
+                    <label for="team-name" class="block mb-2">Team Name</label>
+                    <input type="text" id="team-name" name="teamName" class="w-full p-2 rounded bg-gray-700" required>
+                </div>
+                <div class="mb-4">
+                    <label for="captain-select" class="block mb-2">Select Captain</label>
+                    <select id="captain-select" name="captainId" class="w-full p-2 rounded bg-gray-700" required>
+                        <!-- Captains will be populated here -->
+                    </select>
+                </div>
+                <div class="mb-4">
+                    <label class="block mb-2">Role Color</label>
+                    <div id="color-picker" class="nice-colors">
+                        <!-- Color options will be populated here -->
+                    </div>
+                    <input type="hidden" id="role-color" name="roleColor" required>
+                </div>
+                <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded">
+                    Create Team
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const niceColors = [
+            '#FF6B6B', '#FFD93D', '#6BCB77', '#4D96FF', '#9B59B6', '#F7A072',
+            '#3498DB', '#2ECC71', '#F1C40F', '#E74C3C', '#1ABC9C', '#E67E22'
+        ];
+
+        const colorPicker = document.getElementById('color-picker');
+        const roleColorInput = document.getElementById('role-color');
+
+        niceColors.forEach(color => {
+            const colorBox = document.createElement('div');
+            colorBox.classList.add('color-box');
+            colorBox.style.backgroundColor = color;
+            colorBox.dataset.color = color;
+            colorBox.addEventListener('click', () => {
+                document.querySelectorAll('.color-box').forEach(box => box.classList.remove('selected'));
+                colorBox.classList.add('selected');
+                roleColorInput.value = color;
+            });
+            colorPicker.appendChild(colorBox);
+        });
+
+        // Pre-select the first color
+        if (niceColors.length > 0) {
+            colorPicker.children[0].click();
+        }
+
+        document.getElementById('create-team-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const formData = new FormData(form);
+            const data = Object.fromEntries(formData.entries());
+
+            const response = await fetch('/api/staff/create-team', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+
+            const result = await response.json();
+            alert(result.message);
+            if (response.ok) {
+                form.reset();
+                colorPicker.children[0].click();
+            }
+        });
+
+        // Fetch captains and populate the dropdown
+        async function fetchCaptains() {
+            const response = await fetch('/api/staff/captains');
+            if (response.ok) {
+                const captains = await response.json();
+                const captainSelect = document.getElementById('captain-select');
+                captains.forEach(captain => {
+                    const option = document.createElement('option');
+                    option.value = captain.id;
+                    option.innerHTML = `
+                        <div class="captain-option">
+                            <img src="${captain.avatar}" class="captain-avatar">
+                            <span>${captain.username}</span>
+                        </div>
+                    `;
+                    captainSelect.appendChild(option);
+                });
+            }
+        }
+
+        fetchCaptains();
+    </script>
+</body>
+</html>

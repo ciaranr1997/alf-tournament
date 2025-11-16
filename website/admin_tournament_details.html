@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Tournament Details</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <script src="/js/jquery-3.7.1.min.js"></script>
+    <style>
+        body {
+            background-color: #1a202c;
+            color: #e2e8f0;
+        }
+        .container {
+            max-width: 1200px;
+        }
+        .card {
+            background-color: #2d3748;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .btn-primary {
+            background-color: #4299e1;
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 0.25rem;
+        }
+        .btn-primary:hover {
+            background-color: #3182ce;
+        }
+        .btn-danger {
+            background-color: #e53e3e;
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 0.25rem;
+        }
+        .btn-danger:hover {
+            background-color: #c53030;
+        }
+        .table th, .table td {
+            align-items: center;
+            padding: 0.75rem;
+            border-bottom: 1px solid #4a5568;
+        }
+        .table th {
+            text-align: left; /* This is overridden by text-center in the markup */
+            color: #a0aec0;
+        }
+    </style>
+</head>
+<body class="font-sans">
+    <div class="container mx-auto p-6">
+        <h1 class="text-3xl font-bold mb-6 text-white" id="tournamentTitle">Tournament Details</h1>
+
+        <div class="card p-6 mb-6">
+            <h2 class="text-2xl font-semibold mb-4 text-white">Tournament Information</h2>
+            <div id="tournamentInfo" class="space-y-2">
+                <p><strong>ID:</strong> <span id="detailTournamentId"></span></p>
+                <p><strong>Name:</strong> <span id="detailTournamentName"></span></p>
+                <p><strong>Start Date:</strong> <span id="detailStartDate"></span></p>
+                <p><strong>Active:</strong> <span id="detailIsActive"></span></p>
+            </div>
+            <button id="backToTournaments" class="btn-primary mt-4">Back to Tournaments List</button>
+        </div>
+
+        <div class="card p-6 mb-6">
+            <h2 class="text-2xl font-semibold mb-4 text-white">Manage Teams in Tournament</h2>
+            <div class="flex space-x-4 mb-4">
+                <select id="availableTeams" class="flex-grow p-2 bg-gray-700 border border-gray-600 rounded-md text-white">
+                    <option value="">Select a team to add</option>
+                </select>
+                <button id="addTeamToTournament" class="btn-primary">Add Team</button>
+            </div>
+
+            <h3 class="text-xl font-semibold mb-3 text-white">Teams in this Tournament</h3>
+            <div class="overflow-x-auto">
+                <table class="min-w-full table-auto">
+                    <thead>
+                        <tr>
+                            <th class="px-4 py-2 text-center">Team ID</th>
+                            <th class="px-4 py-2 text-center">Team Name</th>
+                            <th class="px-4 py-2 text-center">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tournamentTeamsTableBody">
+                        </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        $(document).ready(function() {
+            const tournamentId = window.location.pathname.split('/').pop();
+
+            if (tournamentId) {
+                loadTournamentDetails(tournamentId);
+                loadTeamsInTournament(tournamentId);
+                loadAvailableTeams(tournamentId);
+            } else {
+                $('#tournamentTitle').text('Error: Tournament ID not found');
+            }
+
+            $('#backToTournaments').click(function() {
+                window.location.href = '/admin/tournaments';
+            });
+
+            $('#addTeamToTournament').click(function() {
+                const teamId = $('#availableTeams').val();
+                if (teamId) {
+                    $.ajax({
+                        url: `/api/admin/tournaments/${tournamentId}/teams`,
+                        method: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify({ team_id: teamId }),
+                        success: function(response) {
+                            alert(response.message);
+                            loadTeamsInTournament(tournamentId);
+                            loadAvailableTeams(tournamentId); // Reload available teams as one is now in the tournament
+                        },
+                        error: function(xhr) {
+                            alert('Error adding team: ' + (xhr.responseJSON ? xhr.responseJSON.message : xhr.responseText));
+                        }
+                    });
+                } else {
+                    alert('Please select a team to add.');
+                }
+            });
+
+            $(document).on('click', '.remove-team-btn', function() {
+                const teamId = $(this).data('team-id');
+                if (confirm('Are you sure you want to remove this team from the tournament?')) {
+                    $.ajax({
+                        url: `/api/admin/tournaments/${tournamentId}/teams/${teamId}`,
+                        method: 'DELETE',
+                        success: function(response) {
+                            alert(response.message);
+                            loadTeamsInTournament(tournamentId);
+                            loadAvailableTeams(tournamentId); // Reload available teams as one is now removed
+                        },
+                        error: function(xhr) {
+                            alert('Error removing team: ' + (xhr.responseJSON ? xhr.responseJSON.message : xhr.responseText));
+                        }
+                    });
+                }
+            });
+
+            function loadTournamentDetails(id) {
+                $.get(`/api/admin/tournaments/${id}`, function(tournament) {
+                    $('#tournamentTitle').text(`Tournament Details: ${tournament.name}`);
+                    $('#detailTournamentId').text(tournament.tournament_id);
+                    $('#detailTournamentName').text(tournament.name);
+                    $('#detailStartDate').text(tournament.start_date ? new Date(tournament.start_date).toLocaleString() : 'N/A');
+                    $('#detailIsActive').text(tournament.is_active ? 'Yes' : 'No');
+                }).fail(function(xhr) {
+                    alert('Error loading tournament details: ' + (xhr.responseJSON ? xhr.responseJSON.message : xhr.responseText));
+                    $('#tournamentTitle').text('Error loading tournament details');
+                });
+            }
+
+            function loadTeamsInTournament(id) {
+                $.get(`/api/admin/tournaments/${id}/teams`, function(teams) {
+                    const tbody = $('#tournamentTeamsTableBody');
+                    tbody.empty();
+                    if (teams.length === 0) {
+                        tbody.append('<tr><td colspan="3" class="px-4 py-2 text-center">No teams currently in this tournament.</td></tr>');
+                    } else {
+                        teams.forEach(team => {
+                            // MODIFICATION: Added text-center to each td
+                            const row = `
+                                <tr class="hover:bg-gray-700">
+                                    <td class="px-4 py-2 text-center">${team.team_id}</td>
+                                    <td class="px-4 py-2 text-center">${team.team_name}</td>
+                                    <td class="px-4 py-2 text-center">
+                                        <button class="btn-danger btn-sm remove-team-btn" data-team-id="${team.team_id}">Remove</button>
+                                    </td>
+                                </tr>
+                            `;
+                            tbody.append(row);
+                        });
+                    }
+                }).fail(function(xhr) {
+                    alert('Error loading teams in tournament: ' + (xhr.responseJSON ? xhr.responseJSON.message : xhr.responseText));
+                });
+            }
+
+            function loadAvailableTeams(tournamentId) {
+                $.get('/api/staff/teams', function(allTeams) { // Re-using existing API for all teams
+                    $.get(`/api/admin/tournaments/${tournamentId}/teams`, function(teamsInTournament) {
+                        const teamsInTournamentIds = new Set(teamsInTournament.map(t => t.team_id));
+                        const availableTeamsSelect = $('#availableTeams');
+                        availableTeamsSelect.empty();
+                        availableTeamsSelect.append('<option value="">Select a team to add</option>');
+
+                        allTeams.forEach(team => {
+                            if (!teamsInTournamentIds.has(team.team_id)) {
+                                availableTeamsSelect.append(`<option value="${team.team_id}">${team.team_name}</option>`);
+                            }
+                        });
+                    }).fail(function(xhr) {
+                        alert('Error loading teams in tournament for availability check: ' + (xhr.responseJSON ? xhr.responseJSON.message : xhr.responseText));
+                    });
+                }).fail(function(xhr) {
+                    alert('Error loading all teams: ' + (xhr.responseJSON ? xhr.responseJSON.message : xhr.responseText));
+                });
+            }
+        });
+    </script>
+</body>
+</html>

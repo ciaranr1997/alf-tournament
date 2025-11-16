@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Staff Panel</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #1f2937; color: #f9fafb; }
+        .card { background-color: #374151; padding: 2rem; border-radius: 0.5rem; }
+        .staff-option {
+            display: block;
+            padding: 1rem;
+            background-color: #4a5568;
+            border-radius: 0.5rem;
+            text-decoration: none;
+            color: #f9fafb;
+            margin-bottom: 1rem;
+            transition: background-color 0.2s;
+        }
+        .staff-option:hover {
+            background-color: #2d3748;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mx-auto p-4">
+        <div class="card">
+            <h1 class="text-2xl font-bold mb-4">Staff Panel</h1>
+            <p class="mb-8">Welcome, {{USERNAME}} ({{USER_ROLE}}). Please select an option below.</p>
+
+            <a href="/staff/teams" class="staff-option">
+                <h2 class="text-xl font-bold">Manage Teams</h2>
+                <p>Create, edit, and manage tournament teams.</p>
+            </a>
+
+            <a href="/staff/matches" class="staff-option">
+                <h2 class="text-xl font-bold">Manage Matchups</h2>
+                <p>Create and manage tournament matchups.</p>
+            </a>
+
+            <!-- Other staff options can be added here -->
+
+        </div>
+    </div>
+</body>
+</html>

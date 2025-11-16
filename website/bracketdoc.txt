@@ -1,0 +1,589 @@
+jQuery Bracket library [server]
+jQuery bracket is a jQuery plugin that lets users create and display single and double elimination brackets for tournament play.
+
+NEWNeed a tool for round-robin tournament groups? Check out the new jQuery Group library that's under development!
+Installation and project sources
+You can use npm or bower to install the library as a dependency to your project.
+
+npm install jquery-bracket
+or
+bower install jquery-bracket
+Get the original sources and report bugs at GitHub.
+
+ 
+GotBracket.com, follow and host tournaments
+Want to host a tournament? GotBracket.com might just be what you need. It's powered by jQuery Bracket.
+
+Examples
+To try most of the examples use these includes:
+?
+<script type="text/javascript" src="jquery-1.6.2.min.js"></script>
+<script type="text/javascript" src="jquery.bracket.min.js"></script>
+<link rel="stylesheet" type="text/css" href="jquery.bracket.min.css" />
+Data structure
+The bracket information is stored into a single object. Contents of the object determine what is rendered. Play with the save functionality demo and check the input data for other demos.
+
+Number of team pairs determines the size of the bracket. null team will result into BYE. Team playing against BYE will get a default win with no score
+Number of result lists determines the tournament type. One list indicates single elimination. Three (winners, losers and finals) indicates double elimination.
+null instead of a number indicates empty result.
+Unfortunately there is currently no example algorithm to map specific result into a team pair in case you would need to store the information in different format. Solving team names for anything else than first round requires you to calculate the whole tournament tree.
+
+?
+var singleElimination = {
+  "teams": [              // Matchups
+    ["Team 1", "Team 2"], // First match
+    ["Team 3", "Team 4"]  // Second match
+  ],
+  "results": [            // List of brackets (single elimination, so only one bracket)
+    [                     // List of rounds in bracket
+      [                   // First round in this bracket
+        [1, 2],           // Team 1 vs Team 2
+        [3, 4]            // Team 3 vs Team 4
+      ],
+      [                   // Second (final) round in single elimination bracket
+        [5, 6],           // Match for first place
+        [7, 8]            // Match for 3rd place
+      ]
+    ]
+  ]
+}
+ 
+var doubleElimination = {
+  "teams": [
+    ["Team 1", "Team 2"],
+    ["Team 3", "Team 4"]
+  ],
+  "results": [            // List of brackets (three since this is double elimination)
+    [                     // Winner bracket
+      [[1, 2], [3, 4]],   // First round and results
+      [[5, 6]]            // Second round
+    ],
+    [                     // Loser bracket
+      [[7, 8]],           // First round
+      [[9, 10]]           // Second round
+    ],
+    [                     // Final "bracket"
+      [                   // First round
+        [11, 12],         // Match to determine 1st and 2nd
+        [13, 14]          // Match to determine 3rd and 4th
+      ],
+      [                   // Second round
+        [15, 16]          // LB winner won first round (11-12) so need a final decisive round
+      ]
+    ]
+  ]
+}
+Minimal¶
+Team 11Team 22
+Team 33Team 44
+Team 242ndTeam 461st
+Team 123rdTeam 314th
+?
+var minimalData = {
+    teams : [
+      ["Team 1", "Team 2"], /* first matchup */
+      ["Team 3", "Team 4"]  /* second matchup */
+    ],
+    results : [
+      [[1,2], [3,4]],       /* first round */
+      [[4,6], [2,1]]        /* second round */
+    ]
+  }
+ 
+$(function() {
+    $('#minimal .demo').bracket({
+      init: minimalData /* data to initialize the bracket with */ })
+  })
+Resizing¶
+You can adjust the sizes and margins of the bracket elements with initialization parameters. Other styles can be overridden by CSS.
+
+teamWidth: 60;
+scoreWidth: 40;
+matchMargin: 40;
+roundMargin: 20;
+Team 11Team 22
+Team 33Team 44
+Team 242ndTeam 461st
+Team 123rdTeam 314th
+?
+// These are modified by the sliders
+var resizeParameters = {
+  teamWidth: 60,
+  scoreWidth: 20,
+  matchMargin: 10,
+  roundMargin: 50,
+  init: minimalData
+};
+ 
+function updateResizeDemo() {
+  $('#resize .demo').bracket(resizeParameters);
+}
+ 
+$(updateResizeDemo)
+Save functionality and BYEs¶
+Click team and score labels to edit
+Empty team name will remove the team, resulting into BYE
+Use null when initializing team data to mark that branch as BYE
+All teams playing against BYE will get a default win with no score
+Spot that will eventually get a team are shown as TBD
+You can press return when entering scores to proceed to next field
+NOTE: See explanation on balancing a tournament with BYEs
+Additional parameters. Requires save callback to be given.
+disableToolbar: boolean hides the toolbar that allows resizing the bracket and changing its type
+disableTeamEdit: boolean disallows editing teams, allows still editing scores. You must ALSO disable the toolbar (as incresing bracket size would add BYE teams, thus "editing teams")
++
+-
+de
+Team 11Team 20
+Team 3--BYE--
+Team 4--BYE--
+Team 5--BYE--
+Team 1--Team 3--
+Team 41Team 54
+TBD--Team 5--
+TBD--Team 4--
+?
+var saveData = {
+  teams: [
+    ["Team 1", "Team 2"],
+    ["Team 3", null],
+    ["Team 4", null],
+    ["Team 5", null]
+  ],
+  results: [
+      [
+        [[1, 0], [null, null], [null, null], [null, null]],
+        [[null, null], [1, 4]],
+        [[null, null], [null, null]]
+      ]
+  ]
+};
+ 
+/* Called whenever bracket is modified
+ *
+ * data:     changed bracket object in format given to init
+ * userData: optional data given when bracket is created.
+ */
+function saveFn(data, userData) {
+  var json = jQuery.toJSON(data)
+  $('#saveOutput').text('POST '+userData+' '+json)
+  /* You probably want to do something like this
+  jQuery.ajax("rest/"+userData, {contentType: 'application/json',
+                                dataType: 'json',
+                                type: 'post',
+                                data: json})
+  */
+}
+ 
+$(function() {
+    var container = $('div#save .demo')
+    container.bracket({
+      init: saveData,
+      save: saveFn,
+      userData: "http://myapi"})
+ 
+    /* You can also inquiry the current data */
+    var data = container.bracket('data')
+    $('#dataOutput').text(jQuery.toJSON(data))
+  })
+Save output
+Try to first modify some scores or teams
+Data inquired at startup
+{"teams":[["Team 1","Team 2"],["Team 3",null],["Team 4",null],["Team 5",null]],"results":[[[[1,0],[null,null],[null,null],[null,null]],[[null,null],[1,4]],[[null,null],[null,null]]]]}
+Balancing tournaments with BYEs ¶
+Before using BYEs, please read this section to avoid unfair tournaments.
+The library does not take into account the seeding of the players. As different users might have different ways to integrate with the library, it's up to the user to form the ordering of teams for the first round. This leaves room for error if you don't "dry run" your tournament and consider how the teams will advance when getting default wins from BYEd opponents.
+
+The problem
+Here's an example of a problem when teams are assigned in order and BYEs are left last. As you can see, "Team 5" gets to finals without playing a single round, getting an unfair advantage over other teams that have to play two rounds to get there. Of course this can also be the intended order, but if not, be aware of this issue.
+
+Team 11Team 20
+Team 31Team 40
+Team 5--BYE--
+BYE--BYE--
+Team 11Team 30
+Team 5--BYE--
+Team 111stTeam 502nd
+Team 3--3rdBYE--
+The solution
+To avoid situations similar to above, the teams need to be distributed evenly for the first round. You can see an example seeiding below. In principle the spots must be filled always as sparsely as possible, i.e. halve the empty space on each assignment. You can see why when you follow the branching of the bracket.
+
+1. spot--5. spot--
+3. spot--7. spot--
+2. spot--6. spot--
+4. spot--8. spot--
+TBD--TBD--
+TBD--TBD--
+TBD--TBD--
+TBD--TBD--
+Match information¶
+If you wish to make the bracket more interatctive and display match specific information, you can use the match callbacks. You can bind callbacks that are triggered when user clicks or hovers on a match. Custom data regarding which match was triggered will be passed as argument. The data can be input as the third value of each match, first two being the result of the match. The type of the value is not restricted. Hover gets a boolean as second argument indicating if mouse entered or left the match. Callbacks cannot be used in conjunction with the edit feature.
+
+onhover(data: 'Match 2', hover: false)
+Team 14Team 23
+Team 33Team 44
+Team 181stTeam 462nd
+Team 224thTeam 333rd
+?
+var matchData = {
+  teams : [
+    ["Team 1", "Team 2"],
+    ["Team 3", "Team 4"]
+  ],
+  results : [
+    [[4,3,'Match 1'], [3,4,'Match 2']],
+    [[8,6,'Final'], [2,3,'Consolation final']]
+  ]
+}
+ 
+function onclick(data) {
+  $('#matchCallback').text("onclick(data: '" + data + "')")
+}
+ 
+function onhover(data, hover) {
+  $('#matchCallback').text("onhover(data: '" + data + "', hover: " + hover + ")")
+}
+ 
+$(function() {
+  $('#matches .demo').bracket({
+    init: matchData,
+    onMatchClick: onclick,
+    onMatchHover: onhover
+  })
+})
+Data customization¶
+In this demo we customize the rendering and editing of a team. You can give the team data as country:name, where country is a two character country code. There is no proper input validation as it's only for demo purposes.
+
++
+-
+de
+ Team 1--No team--
+ Team 3-- Team 4--
+ Team 1--Upcoming--
+No team--Upcoming--
+?
+/* Custom data objects passed as teams */
+var customData = {
+    teams : [
+      [{name: "Team 1", flag: 'fi'}, null],
+      [{name: "Team 3", flag: 'se'}, {name: "Team 4", flag: 'us'}]
+    ],
+    results : []
+  }
+ 
+/* Edit function is called when team label is clicked */
+function edit_fn(container, data, doneCb) {
+  var input = $('<input type="text">')
+  input.val(data ? data.flag + ':' + data.name : '')
+  container.html(input)
+  input.focus()
+  input.blur(function() {
+    var inputValue = input.val()
+    if (inputValue.length === 0) {
+      doneCb(null); // Drop the team and replace with BYE
+    } else {
+      var flagAndName = inputValue.split(':') // Expects correct input
+      doneCb({flag: flagAndName[0], name: flagAndName[1]})
+    }
+  })
+}
+ 
+/* Render function is called for each team label when data is changed, data
+ * contains the data object given in init and belonging to this slot.
+ *
+ * 'state' is one of the following strings:
+ * - empty-bye: No data or score and there won't team advancing to this place
+ * - empty-tbd: No data or score yet. A team will advance here later
+ * - entry-no-score: Data available, but no score given yet
+ * - entry-default-win: Data available, score will never be given as opponent is BYE
+ * - entry-complete: Data and score available
+ */
+function render_fn(container, data, score, state) {
+  switch(state) {
+    case "empty-bye":
+      container.append("No team")
+      return;
+    case "empty-tbd":
+      container.append("Upcoming")
+      return;
+ 
+    case "entry-no-score":
+    case "entry-default-win":
+    case "entry-complete":
+      container.append('<img src="site/png/'+data.flag+'.png" /> ').append(data.name)
+      return;
+  }
+}
+ 
+$(function() {
+  $('div#customHandlers .demo').bracket({
+    init: customData,
+    save: function(){}, /* without save() labels are disabled */
+    decorator: {edit: edit_fn,
+                render: render_fn}})
+  })
+Double elimination¶
+Note that to trigger empty double elimination bracket, the result must have correct level of nesting and top level arrays, otherwise the bracket will be determined as a single elimination bracket. Minimal result data for initializing double elimination is [[[[]]], [], []]
+Team 41Team 212
+Team 1134thTeam 3143rd
+Team 4152ndTeam 2161st
+Team 11Team 22
+Team 33Team 44
+Team 25Team 46
+Team 17Team 38
+Team 39Team 210
+?
+var doubleEliminationData = {
+    teams : [
+      ["Team 1", "Team 2"],
+      ["Team 3", "Team 4"]
+    ],
+    results : [[      /* WINNER BRACKET */
+      [[1,2], [3,4]], /* first and second matches of the first round */
+      [[5,6]]         /* second round */
+    ], [              /* LOSER BRACKET */
+      [[7,8]],        /* first round */
+      [[9,10]]        /* second round */
+    ], [              /* FINALS */
+      [[1,12], [13,14]],
+      [[15,16]]       /* LB winner won first round so need a rematch */
+    ]]
+  }
+ 
+$(function() {
+    $('div#doubleElimination .demo').bracket({
+      init: doubleEliminationData})
+  })
+No secondary final¶
+In double elimination, you can disable the secondary final which would generally be used if Loser Bracket winner wins the first match against Winner Bracket winner.
+
+Team 412ndTeam 2121st
+Team 1134thTeam 3143rd
+Team 11Team 22
+Team 33Team 44
+Team 25Team 46
+Team 17Team 38
+Team 39Team 210
+?
+$(function() {
+  $('div#noSecondaryFinal .demo').bracket({
+    skipSecondaryFinal: true,
+    init: doubleEliminationData})
+})
+No consolation round¶
+Skip the round to determine 3rd and 4th places.
+
+Team 41Team 212
+Team 4152ndTeam 2161st
+Team 11Team 22
+Team 33Team 44
+Team 25Team 46
+Team 17Team 38
+Team 39Team 210
+?
+$(function() {
+    $('div#noConsolationRound .demo').bracket({
+      skipConsolationRound: true,
+      init: doubleEliminationData})
+  })
+No comeback from loser bracket (added in 0.7.0)¶
+Double elimination in which you can reach 3rd at best if you drop from winner bracket. Tournament finalists come directly from winner bracket.
+
+Team 11Team 22
+Team 33Team 44
+Team 55Team 66
+Team 77Team 88
+Team 29Team 41
+Team 68Team 82
+Team 212ndTeam 631st
+Team 15Team 31
+Team 51Team 72
+Team 11Team 82
+Team 73Team 41
+Team 843rdTeam 724th
+?
+var eightTeams = {
+  teams : [
+    ["Team 1",  "Team 2" ],
+    ["Team 3",  "Team 4" ],
+    ["Team 5",  "Team 6" ],
+    ["Team 7",  "Team 8" ]
+  ],
+  results : [[ /* WINNER BRACKET */
+    [[1,2], [3,4], [5,6], [7,8]],
+    [[9,1], [8,2]],
+    [[1,3]]
+  ], [         /* LOSER BRACKET */
+    [[5,1], [1,2], [3,2], [6,9]],
+    [[1,2], [3,1]],
+    [[4,2]]
+  ]]
+}
+ 
+$(function() {
+  $('div#noGrandFinalComeback .demo').bracket({
+    skipGrandFinalComeback: true,
+    init: eightTeams})
+})
+Reverse flow¶
+Render the bracket from right to left.
+
+Team 41Team 212
+Team 1134thTeam 3143rd
+Team 4152ndTeam 2161st
+Team 11Team 22
+Team 33Team 44
+Team 25Team 46
+Team 17Team 38
+Team 39Team 210
+?
+$(function() {
+    $('div#reverseBracket .demo').bracket({
+      dir: 'rl', /* left-to-right or right-to-left flow, value either "rl" or  "lr" (default) */
+      init: doubleEliminationData})
+  })
+Connector styles¶
+centerConnectors: boolean route connectors between matches instead of seats
+disableHighlight: boolean don't highlight the team progress on mouse hover
+Team 41Team 212
+Team 1134thTeam 3143rd
+Team 4152ndTeam 2161st
+Team 11Team 22
+Team 33Team 44
+Team 25Team 46
+Team 17Team 38
+Team 39Team 210
+?
+$(function() {
+  $('div#connectorStyles .demo').bracket({
+    centerConnectors: true,
+    disableHighlight: true,
+    init: doubleEliminationData})
+})
+Autocomplete demo, try input as "countrycode:name"¶
+This demo uses jQuery UI for the autocomplete.
+
++
+-
+de
+ Team 1-- Team 2--
+BYE--BYE--
+TBD--BYE--
+TBD--BYE--
+?
+var autoCompleteData = {
+    teams : [
+      ['fi:Team 1', 'se:Team 2'],
+      [null, null]
+    ],
+    results : []
+  }
+ 
+/* Data for autocomplete */
+var acData = ["kr:MC", "ca:HuK", "se:Naniwa", "pe:Fenix",
+              "us:IdrA", "tw:Sen", "fi:Naama"]
+ 
+/* If you call doneCb([value], true), the next edit will be automatically 
+   activated. This works only in the first round. */
+function acEditFn(container, data, doneCb) {
+  var input = $('<input type="text">')
+  input.val(data)
+  input.autocomplete({ source: acData })
+  input.blur(function() { doneCb(input.val()) })
+  input.keyup(function(e) { if ((e.keyCode||e.which)===13) input.blur() })
+  container.html(input)
+  input.focus()
+}
+ 
+function acRenderFn(container, data, score, state) {
+  switch(state) {
+    case 'empty-bye':
+      container.append('BYE')
+      return;
+    case 'empty-tbd':
+      container.append('TBD')
+      return;
+ 
+    case 'entry-no-score':
+    case 'entry-default-win':
+    case 'entry-complete':
+      var fields = data.split(':')
+      if (fields.length != 2)
+        container.append('<i>INVALID</i>')
+      else
+        container.append('<img src="site/png/'+fields[0]+'.png"> ').append(fields[1])
+      return;
+  }
+}
+ 
+$(function() {
+    $('div#autoComplete .demo').bracket({
+      init: autoCompleteData,
+      save: function(){}, /* without save() labels are disabled */
+      decorator: {edit: acEditFn,
+                  render: acRenderFn}})
+  })
+Large double elimination with 16 teams¶
+Team 113Team 108
+Team 1614thTeam 423rd
+Team 1121stTeam 1012nd
+Team 13Team 25
+Team 32Team 44
+Team 56Team 63
+Team 72Team 83
+Team 91Team 105
+Team 115Team 123
+Team 137Team 142
+Team 151Team 162
+Team 21Team 42
+Team 53Team 84
+Team 105Team 116
+Team 137Team 168
+Team 49Team 81
+Team 118Team 162
+Team 41Team 113
+Team 15Team 31
+Team 61Team 72
+Team 93Team 122
+Team 146Team 159
+Team 18Team 132
+Team 71Team 102
+Team 96Team 52
+Team 151Team 23
+Team 11Team 102
+Team 93Team 21
+Team 103Team 80
+Team 91Team 169
+Team 103Team 162
+Team 104Team 42
+?
+var bigData = {
+  teams : [
+    ["Team 1",  "Team 2" ],
+    ["Team 3",  "Team 4" ],
+    ["Team 5",  "Team 6" ],
+    ["Team 7",  "Team 8" ],
+    ["Team 9",  "Team 10"],
+    ["Team 11", "Team 12"],
+    ["Team 13", "Team 14"],
+    ["Team 15", "Team 16"]
+  ],
+  results : [[ /* WINNER BRACKET */
+    [[3,5], [2,4], [6,3], [2,3], [1,5], [5,3], [7,2], [1,2]],
+    [[1,2], [3,4], [5,6], [7,8]],
+    [[9,1], [8,2]],
+    [[1,3]]
+  ], [         /* LOSER BRACKET */
+    [[5,1], [1,2], [3,2], [6,9]],
+    [[8,2], [1,2], [6,2], [1,3]],
+    [[1,2], [3,1]],
+    [[3,0], [1,9]],
+    [[3,2]],
+    [[4,2]]
+  ], [         /* FINALS */
+    [[3,8], [1,2]],
+    [[2,1]]
+  ]]
+}
+ 
+$(function() { $('div#big .demo').bracket({init: bigData}) })
