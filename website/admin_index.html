@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Staff Panel</title>
+    <title>Admin Panel</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { background-color: #1f2937; color: #f9fafb; }
         .card { background-color: #374151; padding: 2rem; border-radius: 0.5rem; }
-        .staff-option {
+        .admin-option {
             display: block;
             padding: 1rem;
             background-color: #4a5568;
@@ -17,7 +17,7 @@
             margin-bottom: 1rem;
             transition: background-color 0.2s;
         }
-        .staff-option:hover {
+        .admin-option:hover {
             background-color: #2d3748;
         }
     </style>
@@ -25,25 +25,28 @@
 <body>
     <div class="container mx-auto p-4">
         <div class="card">
-            <h1 class="text-2xl font-bold mb-4">Staff Panel</h1>
+            <h1 class="text-2xl font-bold mb-4">Admin Panel</h1>
             <p class="mb-8">Welcome, {{USERNAME}} ({{USER_ROLE}}). Please select an option below.</p>
 
-            <a href="/staff/teams" class="staff-option">
-                <h2 class="text-xl font-bold">Manage Teams</h2>
-                <p>Create, edit, and manage tournament teams.</p>
+            <a href="/admin/tournaments" class="admin-option">
+                <h2 class="text-xl font-bold">Manage Tournaments</h2>
+                <p>Create, edit, and manage tournaments.</p>
             </a>
 
-            <a href="/staff/matches" class="staff-option">
-                <h2 class="text-xl font-bold">Manage Matches</h2>
-                <p>Create and manage tournament matches.</p>
+            <a href="/admin/brackets" class="admin-option">
+                <h2 class="text-xl font-bold">Manage Brackets</h2>
+                <p>View and manage tournament brackets.</p>
             </a>
 
-            <a href="/staff/killers/edit" class="staff-option">
-                <h2 class="text-xl font-bold">Manage Killer Balancing</h2>
-                <p>Edit killer tiers and availability.</p>
+            <a href="/admin/overlays" class="admin-option">
+                <h2 class="text-xl font-bold">Manage Overlays</h2>
+                <p>Create and manage streaming overlays.</p>
             </a>
 
-            <!-- Other staff options can be added here -->
+            <a href="/staff" class="admin-option">
+                <h2 class="text-xl font-bold">Staff Panel</h2>
+                <p>Go to the staff panel.</p>
+            </a>
 
         </div>
     </div>

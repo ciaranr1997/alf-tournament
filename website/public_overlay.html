@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Overlay</title>
+    <style>
+        body, html {
+            background-color: transparent;
+            margin: 0;
+            padding: 0;
+            width: 1920px;
+            height: 1080px;
+            overflow: hidden;
+        }
+        .overlay-element {
+            position: absolute;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+    <div id="overlay-container">
+        <!-- Elements will be rendered here -->
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const overlayContainer = document.getElementById('overlay-container');
+            const slug = window.location.pathname.split('/').pop();
+
+            async function fetchAndRenderOverlay() {
+                try {
+                    const response = await fetch(`/api/overlay/${slug}`);
+                    if (!response.ok) {
+                        console.error('Overlay not found or error loading.');
+                        return;
+                    }
+                    const overlayData = await response.json();
+                    
+                    overlayContainer.innerHTML = '';
+
+                    overlayData.elements.forEach(elementData => {
+                        const el = document.createElement('div');
+                        el.className = 'overlay-element';
+                        el.style.left = elementData.position_x + 'px';
+                        el.style.top = elementData.position_y + 'px';
+                        el.style.width = elementData.width + 'px';
+                        el.style.height = elementData.height + 'px';
+
+                        if (elementData.type === 'text') {
+                            el.textContent = elementData.content;
+                        } else if (elementData.type === 'image') {
+                            el.style.backgroundImage = `url(${elementData.content})`;
+                            el.style.backgroundSize = 'cover';
+                            el.style.backgroundRepeat = 'no-repeat';
+                            el.style.backgroundPosition = 'center';
+                        }
+                        
+                        if (elementData.style) {
+                            Object.assign(el.style, elementData.style);
+                        }
+                        
+                        overlayContainer.appendChild(el);
+                    });
+
+                } catch (error) {
+                    console.error('Error fetching overlay data:', error);
+                }
+            }
+
+            fetchAndRenderOverlay();
+
+            // Optional: Set up a WebSocket connection for real-time updates
+            // This would require a WebSocket server implementation.
+            // For now, we can poll for changes as a simpler alternative.
+            setInterval(fetchAndRenderOverlay, 5000); // Refresh every 5 seconds
+        });
+    </script>
+    <script>
+        // WebSocket connection for real-time video playback
+        function connect() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${wsProtocol}//${window.location.host}`;
+            const ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('WebSocket connection established for overlay.');
+            };
+
+            ws.onmessage = (event) => {
+                console.log('WebSocket message received:', event.data);
+                try {
+                    const message = JSON.parse(event.data);
+                    if (message.type === 'play_video' && message.payload.url) {
+                        console.log('Received play_video command. Playing:', message.payload.url);
+                        playFullscreenVideo(message.payload.url);
+                    }
+                } catch (error) {
+                    console.error('Error parsing WebSocket message:', error);
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket Error:', error);
+                // This will trigger the onclose event.
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket connection closed. Attempting to reconnect in 5 seconds...');
+                setTimeout(connect, 5000); // Reconnect without reloading the page
+            };
+        }
+
+        function playFullscreenVideo(videoUrl) {
+            // Remove any existing video overlay first
+            const existingVideo = document.getElementById('video-overlay');
+            if (existingVideo) {
+                existingVideo.remove();
+            }
+
+            const video = document.createElement('video');
+            video.id = 'video-overlay';
+            video.src = videoUrl;
+            video.style.position = 'fixed';
+            video.style.top = '0';
+            video.style.left = '0';
+            video.style.width = '100vw';
+            video.style.height = '100vh';
+            video.style.objectFit = 'cover';
+            video.style.zIndex = '9999';
+            video.autoplay = true;
+            //video.muted = true; // IMPORTANT: Mute video to allow autoplay in browsers
+
+            document.body.appendChild(video);
+
+            video.onended = () => {
+                video.remove();
+            };
+
+            video.play().catch(error => {
+                console.error("Video playback failed:", error);
+                // Clean up if playback fails to start
+                video.remove();
+            });
+        }
+
+        connect(); // Initial connection
+    </script>
+</body>
+</html>

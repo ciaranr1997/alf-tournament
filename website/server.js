@@ -164,6 +164,11 @@ app.get('/', (req, res) => {
     res.send(pageHtml);
 });
 
+app.get('/overlay/:slug', (req, res) => {
+    const pageHtml = readTemplate('public_overlay.html');
+    res.send(pageHtml);
+});
+
 app.get('/staff', requireRole(ROLES.STAFF), (req, res) => {
     const pageHtml = readTemplate('staff_index.html', {
         USERNAME: req.user.username,
@@ -197,11 +202,27 @@ app.get('/staff/matches', requireRole(ROLES.STAFF), (req, res) => {
     res.send(pageHtml);
 });
 
+app.get('/admin', requireRole(ROLES.ADMIN), (req, res) => {
+    const pageHtml = readTemplate('admin_index.html', {
+        USERNAME: req.user.username,
+        USER_ROLE: req.user.role,
+    });
+    res.send(pageHtml);
+});
+
 app.get('/admin/bracket/:tournamentId', requireRole(ROLES.ADMIN), (req, res) => {
     const tournamentId = req.params.tournamentId;
     const pageHtml = readTemplate('admin_bracket.html', {
         USERNAME: req.user.username,
         TOURNAMENT_ID: tournamentId 
+    });
+    res.send(pageHtml);
+});
+
+app.get('/admin/brackets', requireRole(ROLES.ADMIN), (req, res) => {
+    const pageHtml = readTemplate('admin_brackets.html', {
+        USERNAME: req.user.username,
+        USER_ROLE: req.user.role,
     });
     res.send(pageHtml);
 });
@@ -223,16 +244,41 @@ app.get('/admin/tournaments/:tournamentId', requireRole(ROLES.ADMIN), (req, res)
     res.send(pageHtml);
 });
 
+app.get('/admin/overlays', requireRole(ROLES.ADMIN), (req, res) => {
+    const pageHtml = readTemplate('admin_overlays.html', {
+        USERNAME: req.user.username,
+        USER_ROLE: req.user.role,
+    });
+    res.send(pageHtml);
+});
+
+app.get('/admin/overlays/edit/:overlayId', requireRole(ROLES.ADMIN), (req, res) => {
+    const pageHtml = readTemplate('admin_overlay_editor.html', {
+        USERNAME: req.user.username,
+        USER_ROLE: req.user.role,
+        OVERLAY_ID: req.params.overlayId
+    });
+    res.send(pageHtml);
+});
+
+app.get('/admin/video-playback', requireRole(ROLES.ADMIN), (req, res) => {
+    const pageHtml = readTemplate('admin_video_playback.html', {
+        USERNAME: req.user.username,
+        USER_ROLE: req.user.role,
+    });
+    res.send(pageHtml);
+});
+
 app.get('/staff/killers/edit', requireRole(ROLES.STAFF), async (req, res) => { // Note: This route was previously duplicated, I've removed the extra one.
     try {
-        const [killers] = await dbPool.query('SELECT killer_id, killer_name, allowed, tier, art_url FROM Killers ORDER BY killer_order');
+        const [killers] = await dbPool.query('SELECT killer_id, killer_name, allowed, tier, art_url FROM Killers ORDER BY allowed DESC, killer_order ASC');
         const [tiers] = await dbPool.query('SELECT tier_id, tier_name FROM Tiers ORDER BY tier_id');
         const [rules] = await dbPool.query('SELECT killer_id, role, category, rule_text FROM KillerRules ORDER BY killer_id, role, category');
         const [maps] = await dbPool.query(`
             SELECT km.killer_id, m.map_name, km.priority 
             FROM KillerMaps km 
             JOIN Maps m ON km.map_id = m.map_id 
-            ORDER BY km.killer_id, km.priority
+            ORDER BY km.killer_id
         `);
 
         // Group rules and maps by killer_id for easy lookup
@@ -690,41 +736,41 @@ app.get('/api/teams', requireRole(ROLES.STAFF), async (req, res) => {
     }
 });
 
-app.get('/api/matchups', requireRole(ROLES.STAFF), async (req, res) => {
+app.get('/api/matches', requireRole(ROLES.STAFF), async (req, res) => {
     try {
-        const [matchups] = await dbPool.query(`
+        const [matches] = await dbPool.query(`
             SELECT 
                 m.match_id,
                 m.round_name,
                 t1.team_name as team1_name,
                 t2.team_name as team2_name,
                 m.format
-            FROM matchups m
+            FROM Matches m
             JOIN Teams t1 ON m.team_a_id = t1.team_id
             JOIN Teams t2 ON m.team_b_id = t2.team_id
             ORDER BY m.match_id DESC
         `);
-        res.json(matchups);
+        res.json(matches);
     } catch (error) {
-        console.error('Error fetching matchups:', error);
-        res.status(500).json({ message: 'Error fetching matchups' });
+        console.error('Error fetching matches:', error);
+        res.status(500).json({ message: 'Error fetching matches' });
     }
 });
 
-app.delete('/api/matchups/:id', requireRole(ROLES.STAFF), async (req, res) => {
+app.delete('/api/matches/:id', requireRole(ROLES.STAFF), async (req, res) => {
     try {
-        const [result] = await dbPool.query('DELETE FROM matchups WHERE match_id = ?', [req.params.id]);
+        const [result] = await dbPool.query('DELETE FROM Matches WHERE match_id = ?', [req.params.id]);
         if (result.affectedRows === 0) {
-            return res.status(404).json({ message: 'Matchup not found' });
+            return res.status(404).json({ message: 'Match not found' });
         }
-        res.json({ message: 'Matchup deleted successfully' });
+        res.json({ message: 'Match deleted successfully' });
     } catch (error) {
-        console.error('Error deleting matchup:', error);
-        res.status(500).json({ message: 'Error deleting matchup' });
+        console.error('Error deleting match:', error);
+        res.status(500).json({ message: 'Error deleting match' });
     }
 });
 
-app.post('/api/matchups', requireRole(ROLES.STAFF), async (req, res) => {
+app.post('/api/matches', requireRole(ROLES.STAFF), async (req, res) => {
     const { team1, team2, bestOf, round } = req.body;
 
     if (!team1 || !team2 || !bestOf || !round) {
@@ -746,14 +792,14 @@ app.post('/api/matchups', requireRole(ROLES.STAFF), async (req, res) => {
         const format = `Bo${bestOf}`;
 
         await dbPool.execute(
-            'INSERT INTO matchups (tournament_id, team_a_id, team_b_id, format, round_name) VALUES (?, ?, ?, ?, ?)',
+            'INSERT INTO Matches (tournament_id, team_a_id, team_b_id, format, round_name) VALUES (?, ?, ?, ?, ?)',
             [tournamentId, team1, team2, format, round]
         );
 
-        res.json({ message: 'Matchup created successfully' });
+        res.json({ message: 'Match created successfully' });
     } catch (error) {
-        console.error('Error creating matchup:', error);
-        res.status(500).json({ message: 'Error creating matchup' });
+        console.error('Error creating match:', error);
+        res.status(500).json({ message: 'Error creating match' });
     }
 });
 
@@ -766,7 +812,7 @@ app.get('/api/bracket/:tournamentId', async (req, res) => { // Renamed from /api
                 m.match_id, m.round_name, m.winner_id,
                 ta.team_id as team_a_id, ta.team_name as team_a_name, ta.logo_url as team_a_logo, ta.role_id as team_a_role_id,
                 tb.team_id as team_b_id, tb.team_name as team_b_name, tb.logo_url as team_b_logo, tb.role_id as team_b_role_id
-             FROM Matches m
+             FROM Brackets m
              LEFT JOIN Teams ta ON m.team_a_id = ta.team_id
              LEFT JOIN Teams tb ON m.team_b_id = tb.team_id
              WHERE m.tournament_id = ?
@@ -838,7 +884,7 @@ app.get('/api/tournament/:tournamentId/bracket-data-jq', async (req, res) => {
                 m.match_id, m.round_name, m.winner_id,
                 m.team_a_id, ta.team_name as team_a_name, ta.logo_url as team_a_logo,
                 m.team_b_id, tb.team_name as team_b_name, tb.logo_url as team_b_logo
-             FROM Matches m
+             FROM Brackets m
              LEFT JOIN Teams ta ON m.team_a_id = ta.team_id
              LEFT JOIN Teams tb ON m.team_b_id = tb.team_id
              WHERE m.tournament_id = ?
@@ -925,7 +971,7 @@ async function advanceWinner(matchId, winnerTeamId, conn) {
     try {
         // 1. Find the next match this winner should advance to
         const [matches] = await conn.execute(
-            'SELECT winner_advances_to_match_id, winner_advances_to_slot FROM Matches WHERE match_id = ?',
+            'SELECT winner_advances_to_match_id, winner_advances_to_slot FROM Brackets WHERE match_id = ?',
             [matchId]
         );
 
@@ -940,7 +986,7 @@ async function advanceWinner(matchId, winnerTeamId, conn) {
         const fieldToUpdate = nextSlot === 'A' ? 'team_a_id' : 'team_b_id';
         
         await conn.execute(
-            `UPDATE Matches SET ${fieldToUpdate} = ? WHERE match_id = ?`,
+            `UPDATE Brackets SET ${fieldToUpdate} = ? WHERE match_id = ?`,
             [winnerTeamId, nextMatchId]
         );
 
@@ -953,7 +999,7 @@ async function advanceWinner(matchId, winnerTeamId, conn) {
     }
 }
 
-app.post('/api/admin/matches/:matchId/winner', requireRole(ROLES.STAFF), async (req, res) => {
+app.post('/api/admin/brackets/:matchId/winner', requireRole(ROLES.STAFF), async (req, res) => {
     const { matchId } = req.params;
     const { winnerTeamId } = req.body;
 
@@ -966,7 +1012,7 @@ app.post('/api/admin/matches/:matchId/winner', requireRole(ROLES.STAFF), async (
         await conn.beginTransaction();
 
         // Get the match details to determine the loser
-        const [matches] = await conn.execute('SELECT team_a_id, team_b_id FROM Matches WHERE match_id = ?', [matchId]);
+        const [matches] = await conn.execute('SELECT team_a_id, team_b_id FROM Brackets WHERE match_id = ?', [matchId]);
         if (matches.length === 0) {
             throw new Error('Match not found');
         }
@@ -974,7 +1020,7 @@ app.post('/api/admin/matches/:matchId/winner', requireRole(ROLES.STAFF), async (
         const loserTeamId = (String(team_a_id) === String(winnerTeamId)) ? team_b_id : team_a_id;
 
         // 1. Set the winner and loser for the current match
-        await conn.execute('UPDATE Matches SET winner_id = ?, loser_id = ? WHERE match_id = ?', [winnerTeamId, loserTeamId, matchId]);
+        await conn.execute('UPDATE Brackets SET winner_id = ?, loser_id = ? WHERE match_id = ?', [winnerTeamId, loserTeamId, matchId]);
 
         // 2. Automatically advance the winner to the next match
         await advanceWinner(matchId, winnerTeamId, conn);
@@ -990,7 +1036,7 @@ app.post('/api/admin/matches/:matchId/winner', requireRole(ROLES.STAFF), async (
     }
 });
 
-app.put('/api/admin/matches/:matchId/assign-team', requireRole(ROLES.STAFF), async (req, res) => {
+app.put('/api/admin/brackets/:matchId/assign-team', requireRole(ROLES.STAFF), async (req, res) => {
     const { matchId } = req.params;
     const { teamId, slot } = req.body; // teamId can now be null to clear a slot
 
@@ -1008,7 +1054,7 @@ app.put('/api/admin/matches/:matchId/assign-team', requireRole(ROLES.STAFF), asy
         const fieldToUpdate = slot === 'A' ? 'team_a_id' : 'team_b_id';
         
         const [result] = await conn.execute(
-            `UPDATE Matches SET ${fieldToUpdate} = ? WHERE match_id = ?`,
+            `UPDATE Brackets SET ${fieldToUpdate} = ? WHERE match_id = ?`,
             [teamId, matchId] // teamId can be null here
         );
 
@@ -1099,7 +1145,7 @@ app.post('/api/admin/tournaments', requireRole(ROLES.ADMIN), async (req, res) =>
         const insertedMatchIds = [];
         for (const matchData of matchesToInsert) {
             const [matchResult] = await conn.execute(
-                'INSERT INTO Matches (tournament_id, round_name, format, team_a_id, team_b_id) VALUES (?, ?, ?, NULL, NULL)',
+                'INSERT INTO Brackets (tournament_id, round_name, format, team_a_id, team_b_id) VALUES (?, ?, ?, NULL, NULL)',
                 [tournamentId, matchData.round_name, 'Bo3'] // Default format to Bo3
             );
             insertedMatchIds.push(matchResult.insertId);
@@ -1113,7 +1159,7 @@ app.post('/api/admin/tournaments', requireRole(ROLES.ADMIN), async (req, res) =>
             if (matchData.winner_advances_to_match_id !== null) {
                 const nextMatchDbId = insertedMatchIds[matchData.winner_advances_to_match_id - 1]; // Adjust index
                 await conn.execute(
-                    'UPDATE Matches SET winner_advances_to_match_id = ?, winner_advances_to_slot = ? WHERE match_id = ?',
+                    'UPDATE Brackets SET winner_advances_to_match_id = ?, winner_advances_to_slot = ? WHERE match_id = ?',
                     [nextMatchDbId, matchData.winner_advances_to_slot, currentMatchId]
                 );
             }
@@ -1245,14 +1291,269 @@ app.delete('/api/admin/tournaments/:tournamentId/teams/:teamId', requireRole(ROL
     }
 });
 
+// --- OVERLAY ENDPOINTS ---
+
+// GET overlay by slug (public)
+app.get('/api/overlay/:token', async (req, res) => {
+    const { token } = req.params;
+    try {
+        const [overlays] = await dbPool.query('SELECT layout_config FROM Overlays WHERE unique_url_token = ?', [token]);
+        if (overlays.length === 0) {
+            return res.status(404).json({ message: 'Overlay not found.' });
+        }
+        const layout = JSON.parse(overlays[0].layout_config || '[]');
+        
+        // For consistency with the editor's expectation of an 'elements' property
+        res.json({
+            elements: layout
+        });
+    } catch (error) {
+        console.error('Error fetching overlay by token:', error);
+        res.status(500).json({ message: 'Error fetching overlay data' });
+    }
+});
+
+// GET all overlays
+app.get('/api/admin/overlays', requireRole(ROLES.ADMIN), async (req, res) => {
+    try {
+        const [overlays] = await dbPool.query('SELECT overlay_id, name, description, unique_url_token FROM Overlays ORDER BY created_at DESC');
+        res.json(overlays);
+    } catch (error) {
+        console.error('Error fetching overlays:', error);
+        res.status(500).json({ message: 'Error fetching overlays' });
+    }
+});
+
+// POST create new overlay
+app.post('/api/admin/overlays', requireRole(ROLES.ADMIN), async (req, res) => {
+    const { name, unique_url_token, description } = req.body;
+    if (!name || !unique_url_token) {
+        return res.status(400).json({ message: 'Overlay name and token are required.' });
+    }
+    if (!/^[a-z0-9-]+$/.test(unique_url_token)) {
+        return res.status(400).json({ message: 'Token can only contain lowercase letters, numbers, and hyphens.' });
+    }
+
+    try {
+        const [result] = await dbPool.execute(
+            'INSERT INTO Overlays (name, description, unique_url_token, layout_config) VALUES (?, ?, ?, ?)',
+            [name, description || null, unique_url_token, '[]']
+        );
+        res.status(201).json({ message: 'Overlay created successfully!', overlay_id: result.insertId });
+    } catch (error) {
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ message: 'An overlay with this token already exists.' });
+        }
+        console.error('Error creating overlay:', error);
+        res.status(500).json({ message: 'Error creating overlay' });
+    }
+});
+
+// PUT update overlay
+app.put('/api/admin/overlays/:overlayId', requireRole(ROLES.ADMIN), async (req, res) => {
+    const { overlayId } = req.params;
+    const { name, unique_url_token, description } = req.body;
+    if (!name || !unique_url_token) {
+        return res.status(400).json({ message: 'Overlay name and token are required.' });
+    }
+    if (!/^[a-z0-9-]+$/.test(unique_url_token)) {
+        return res.status(400).json({ message: 'Token can only contain lowercase letters, numbers, and hyphens.' });
+    }
+
+    try {
+        const [result] = await dbPool.execute(
+            'UPDATE Overlays SET name = ?, description = ?, unique_url_token = ? WHERE overlay_id = ?',
+            [name, description || null, unique_url_token, overlayId]
+        );
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Overlay not found.' });
+        }
+        res.json({ message: 'Overlay updated successfully!' });
+    } catch (error) {
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ message: 'An overlay with this token already exists.' });
+        }
+        console.error('Error updating overlay:', error);
+        res.status(500).json({ message: 'Error updating overlay' });
+    }
+});
+
+// DELETE overlay
+app.delete('/api/admin/overlays/:overlayId', requireRole(ROLES.ADMIN), async (req, res) => {
+    const { overlayId } = req.params;
+    try {
+        const [result] = await dbPool.execute('DELETE FROM Overlays WHERE overlay_id = ?', [overlayId]);
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Overlay not found.' });
+        }
+        res.json({ message: 'Overlay deleted successfully!' });
+    } catch (error) {
+        console.error('Error deleting overlay:', error);
+        res.status(500).json({ message: 'Error deleting overlay' });
+    }
+});
+
+// GET all elements for an overlay
+app.get('/api/admin/overlays/:overlayId/elements', requireRole(ROLES.ADMIN), async (req, res) => {
+    const { overlayId } = req.params;
+    try {
+        const [rows] = await dbPool.query('SELECT layout_config FROM Overlays WHERE overlay_id = ?', [overlayId]);
+        if (rows.length === 0) {
+            return res.status(404).json({ message: 'Overlay not found.' });
+        }
+        res.json(JSON.parse(rows[0].layout_config || '[]'));
+    } catch (error) {
+        console.error('Error fetching overlay elements:', error);
+        res.status(500).json({ message: 'Error fetching overlay elements' });
+    }
+});
+
+// POST create new element
+app.post('/api/admin/overlays/:overlayId/elements', requireRole(ROLES.ADMIN), async (req, res) => {
+    const { overlayId } = req.params;
+    const { type, content, position_x, position_y, width, height, style } = req.body;
+    const conn = await dbPool.getConnection();
+    try {
+        await conn.beginTransaction();
+        const [rows] = await conn.query('SELECT layout_config FROM Overlays WHERE overlay_id = ? FOR UPDATE', [overlayId]);
+        if (rows.length === 0) {
+            await conn.rollback();
+            return res.status(404).json({ message: 'Overlay not found.' });
+        }
+        
+        const layout = JSON.parse(rows[0].layout_config || '[]');
+        const newElement = { 
+            element_id: Date.now(), // Use timestamp as a unique ID within the layout
+            type, content, position_x, position_y, width, height, 
+            style: style || {}
+        };
+        layout.push(newElement);
+
+        await conn.execute('UPDATE Overlays SET layout_config = ? WHERE overlay_id = ?', [JSON.stringify(layout), overlayId]);
+        await conn.commit();
+        
+        res.status(201).json(newElement);
+    } catch (error) {
+        await conn.rollback();
+        console.error('Error creating overlay element:', error);
+        res.status(500).json({ message: 'Error creating overlay element' });
+    } finally {
+        conn.release();
+    }
+});
+
+// PUT update element
+app.put('/api/admin/overlays/:overlayId/elements/:elementId', requireRole(ROLES.ADMIN), async (req, res) => {
+    const { overlayId, elementId } = req.params;
+    const updatedElementData = req.body;
+
+    const conn = await dbPool.getConnection();
+    try {
+        await conn.beginTransaction();
+        const [rows] = await conn.query('SELECT layout_config FROM Overlays WHERE overlay_id = ? FOR UPDATE', [overlayId]);
+        if (rows.length === 0) {
+            await conn.rollback();
+            return res.status(404).json({ message: 'Overlay not found.' });
+        }
+
+        let layout = JSON.parse(rows[0].layout_config || '[]');
+        const elementIndex = layout.findIndex(el => el.element_id == elementId);
+
+        if (elementIndex === -1) {
+            await conn.rollback();
+            return res.status(404).json({ message: 'Element not found in layout.' });
+        }
+
+        // Preserve the original element_id while updating other properties
+        layout[elementIndex] = { ...layout[elementIndex], ...updatedElementData, element_id: layout[elementIndex].element_id };
+
+        await conn.execute('UPDATE Overlays SET layout_config = ? WHERE overlay_id = ?', [JSON.stringify(layout), overlayId]);
+        await conn.commit();
+
+        res.json({ message: 'Element updated successfully!' });
+    } catch (error) {
+        await conn.rollback();
+        console.error('Error updating overlay element:', error);
+        res.status(500).json({ message: 'Error updating overlay element' });
+    } finally {
+        conn.release();
+    }
+});
+
+
+// DELETE element
+app.delete('/api/admin/overlays/:overlayId/elements/:elementId', requireRole(ROLES.ADMIN), async (req, res) => {
+    const { overlayId, elementId } = req.params;
+    
+    const conn = await dbPool.getConnection();
+    try {
+        await conn.beginTransaction();
+        const [rows] = await conn.query('SELECT layout_config FROM Overlays WHERE overlay_id = ? FOR UPDATE', [overlayId]);
+        if (rows.length === 0) {
+            await conn.rollback();
+            return res.status(404).json({ message: 'Overlay not found.' });
+        }
+
+        let layout = JSON.parse(rows[0].layout_config || '[]');
+        const newLayout = layout.filter(el => el.element_id != elementId);
+
+        if (layout.length === newLayout.length) {
+            await conn.rollback();
+            return res.status(404).json({ message: 'Element not found in layout.' });
+        }
+
+        await conn.execute('UPDATE Overlays SET layout_config = ? WHERE overlay_id = ?', [JSON.stringify(newLayout), overlayId]);
+        await conn.commit();
+
+        res.json({ message: 'Element deleted successfully!' });
+    } catch (error) {
+        await conn.rollback();
+        console.error('Error deleting overlay element:', error);
+        res.status(500).json({ message: 'Error deleting overlay element' });
+    } finally {
+        conn.release();
+    }
+});
+
+// POST to play a video on all overlays
+app.post('/api/admin/overlays/play-video', requireRole(ROLES.ADMIN), (req, res) => {
+    const { videoUrl } = req.body;
+    if (!videoUrl) {
+        return res.status(400).json({ message: 'videoUrl is required.' });
+    }
+
+    const { wss } = req.app.locals;
+    if (!wss) {
+        return res.status(500).json({ message: 'WebSocket server is not initialized.' });
+    }
+
+    const message = JSON.stringify({
+        type: 'play_video',
+        payload: {
+            url: videoUrl
+        }
+    });
+
+    let clientCount = 0;
+    wss.clients.forEach(client => {
+        if (client.readyState === 1) { // WebSocket.OPEN
+            client.send(message);
+            clientCount++;
+        }
+    });
+
+    res.json({ message: `Play video command sent to ${clientCount} overlay(s).` });
+});
+
+
 // New API endpoint to clear all team assignments for a tournament
-app.delete('/api/admin/tournaments/:tournamentId/matches/teams', requireRole(ROLES.ADMIN), async (req, res) => {
+app.delete('/api/admin/tournaments/:tournamentId/brackets/teams', requireRole(ROLES.ADMIN), async (req, res) => {
     const { tournamentId } = req.params;
     const conn = await dbPool.getConnection();
     try {
         await conn.beginTransaction();
         const [result] = await conn.execute(
-            'UPDATE Matches SET team_a_id = NULL, team_b_id = NULL, winner_id = NULL, loser_id = NULL WHERE tournament_id = ?',
+            'UPDATE Brackets SET team_a_id = NULL, team_b_id = NULL, winner_id = NULL, loser_id = NULL WHERE tournament_id = ?',
             [tournamentId]
         );
         await conn.commit();
@@ -1267,12 +1568,12 @@ app.delete('/api/admin/tournaments/:tournamentId/matches/teams', requireRole(ROL
 });
 
 // New API endpoint to get all matches for a tournament
-app.get('/api/tournament/:tournamentId/matches', async (req, res) => {
+app.get('/api/tournament/:tournamentId/brackets', async (req, res) => {
     const { tournamentId } = req.params;
     try {
         const [matches] = await dbPool.query(
             `SELECT match_id, team_a_id, team_b_id, round_name, winner_advances_to_match_id, winner_advances_to_slot
-             FROM Matches
+             FROM Brackets
              WHERE tournament_id = ?
              ORDER BY match_id`,
             [tournamentId]
@@ -1284,7 +1585,7 @@ app.get('/api/tournament/:tournamentId/matches', async (req, res) => {
     }
 });
 
-app.get('/api/matches/:matchId', requireRole(ROLES.STAFF), async (req, res) => {
+app.get('/api/brackets/:matchId', requireRole(ROLES.STAFF), async (req, res) => {
     const { matchId } = req.params;
     let conn;
     try {
@@ -1293,7 +1594,7 @@ app.get('/api/matches/:matchId', requireRole(ROLES.STAFF), async (req, res) => {
             `SELECT m.match_id, m.team_a_id, m.team_b_id, 
                     tA.team_name as team_a_name, tA.captain_id as team_a_captain_id,
                     tB.team_name as team_b_name, tB.captain_id as team_b_captain_id
-             FROM Matches m
+             FROM Brackets m
              LEFT JOIN Teams tA ON m.team_a_id = tA.team_id
              LEFT JOIN Teams tB ON m.team_b_id = tB.team_id
              WHERE m.match_id = ?`,
@@ -1326,27 +1627,6 @@ app.get('/api/tournaments/active', async (req, res) => {
     } catch (error) {
         console.error('Error fetching active tournament:', error);
         res.status(500).json({ message: 'Error fetching active tournament' });
-    }
-});
-
-app.post('/api/matches/:matchId/start-pick-ban', requireRole(ROLES.STAFF), async (req, res) => {
-    const { matchId } = req.params;
-    const bot = req.app.locals.bot;
-
-    if (!bot.startPickBan) {
-        console.error('Bot is not ready or pick/ban function is not available.');
-        return res.status(500).json({ message: 'Bot is not ready or pick/ban function is not available.' });
-    }
-
-    try {
-        // Intentionally not awaiting this. The bot will handle the process asynchronously.
-        // The web request should return immediately to not time out.
-        bot.startPickBan(matchId, req.user);
-        
-        res.json({ message: 'Pick/ban process initiated in Discord.' });
-    } catch (error) {
-        console.error(`Error starting pick/ban for match ${matchId}:`, error);
-        res.status(500).json({ message: 'Failed to start pick/ban process.' });
     }
 });
 

@@ -202,6 +202,7 @@
         <body>
             <h1>Tournament Bracket (Admin View)</h1>
             <div class="controls" style="margin-bottom: 20px;">
+                <a href="/admin/brackets" style="background-color: #6b7280; color: white; padding: 10px 20px; border-radius: 5px; border: none; cursor: pointer; text-decoration: none; margin-right: 10px;">Back to Brackets List</a>
                 <button id="reset-bracket-btn" style="background-color: #dc2626; color: white; padding: 10px 20px; border-radius: 5px; border: none; cursor: pointer; margin-right: 10px;">Reset Bracket</button>
                 <button id="save-bracket-btn" style="background-color: #22c55e; color: white; padding: 10px 20px; border-radius: 5px; border: none; cursor: pointer;">Save (Refresh)</button>
             </div>
@@ -270,7 +271,7 @@
                     async function loadTeamsAndBracket() {
                         try {
                             // Fetch all matches for mapping
-                            const matchesResponse = await $.get(`/api/tournament/${tournamentId}/matches`);
+                            const matchesResponse = await $.get(`/api/tournament/${tournamentId}/brackets`);
                             allMatches = matchesResponse;
         
                             // Fetch available teams
@@ -485,7 +486,7 @@
                             
                             // Clear the old slot in the database
                             await $.ajax({
-                                url: `/api/admin/matches/${oldPosition.matchId}/assign-team`,
+                                url: `/api/admin/brackets/${oldPosition.matchId}/assign-team`,
                                 type: 'PUT',
                                 contentType: 'application/json',
                                 data: JSON.stringify({ teamId: null, slot: oldPosition.slot }),
@@ -499,7 +500,7 @@
         
                         // Assign the new team
                         $.ajax({
-                            url: `/api/admin/matches/${matchId}/assign-team`,
+                            url: `/api/admin/brackets/${matchId}/assign-team`,
                             type: 'PUT',
                             contentType: 'application/json',
                             data: JSON.stringify({ teamId: teamId, slot: slot }),
@@ -526,7 +527,7 @@
                         if (confirm('Are you sure you want to clear all team assignments for this bracket? This action cannot be undone.')) {
                             try {
                                 await $.ajax({
-                                    url: `/api/admin/tournaments/${tournamentId}/matches/teams`,
+                                    url: `/api/admin/tournaments/${tournamentId}/brackets/teams`,
                                     type: 'DELETE',
                                     contentType: 'application/json'
                                 });

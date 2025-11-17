@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Staff Panel - Matches</title>
+    <title>Staff Panel - Brackets</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { background-color: #1f2937; color: #f9fafb; }
@@ -14,7 +14,7 @@
 <body>
     <div class="container mx-auto p-4">
         <div class="card">
-            <h1 class="text-2xl font-bold mb-4">Create Matchup</h1>
+            <h1 class="text-2xl font-bold mb-4">Create Match</h1>
             <form id="createMatchupForm" class="mt-4">
                 <div class="mb-4">
                     <label for="team1" class="block mb-2">Team 1</label>
@@ -42,12 +42,12 @@
                         <option>Finals</option>
                     </select>
                 </div>
-                <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded">Create Matchup</button>
+                <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded">Create Match</button>
             </form>
 
             <hr class="my-6 border-gray-600">
 
-            <h2 class="text-2xl font-bold mb-4">Existing Matchups</h2>
+            <h2 class="text-2xl font-bold mb-4">Existing Matches</h2>
             <div class="overflow-x-auto">
                 <table class="min-w-full">
                     <thead>
@@ -59,8 +59,8 @@
                             <th class="py-2 px-4 border-b border-gray-600 text-left">Actions</th>
                         </tr>
                     </thead>
-                    <tbody id="matchupsTable">
-                        <!-- Matchups will be dynamically inserted here -->
+                    <tbody id="matchesTable">
+                        <!-- Matches will be dynamically inserted here -->
                     </tbody>
                 </table>
             </div>
@@ -69,24 +69,24 @@
 
     <script src="/js/jquery-3.7.1.min.js"></script>
     <script>
-        function loadMatchups() {
-            $.get("/api/matchups", function(matchups) {
-                const matchupsTable = $("#matchupsTable");
-                matchupsTable.empty(); // Clear existing rows
-                matchups.forEach(matchup => {
+        function loadMatches() {
+            $.get("/api/matches", function(matches) {
+                const matchesTable = $("#matchesTable");
+                matchesTable.empty(); // Clear existing rows
+                matches.forEach(match => {
                     const row = `
                         <tr>
-                            <td class="py-2 px-4 border-b border-gray-600">${matchup.round_name}</td>
-                            <td class="py-2 px-4 border-b border-gray-600">${matchup.team1_name}</td>
-                            <td class="py-2 px-4 border-b border-gray-600">${matchup.team2_name}</td>
-                            <td class="py-2 px-4 border-b border-gray-600">${matchup.format}</td>
+                            <td class="py-2 px-4 border-b border-gray-600">${match.round_name}</td>
+                            <td class="py-2 px-4 border-b border-gray-600">${match.team1_name}</td>
+                            <td class="py-2 px-4 border-b border-gray-600">${match.team2_name}</td>
+                            <td class="py-2 px-4 border-b border-gray-600">${match.format}</td>
                             <td class="py-2 px-4 border-b border-gray-600">
-                                <button class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-1 px-2 rounded text-sm start-pick-ban" data-id="${matchup.match_id}">Picks/Bans</button>
-                                <button class="bg-red-500 hover:bg-red-600 text-white font-bold py-1 px-2 rounded text-sm delete-matchup" data-id="${matchup.match_id}">Delete</button>
+                                <button class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-1 px-2 rounded text-sm start-pick-ban" data-id="${match.match_id}">Picks/Bans</button>
+                                <button class="bg-red-500 hover:bg-red-600 text-white font-bold py-1 px-2 rounded text-sm delete-match" data-id="${match.match_id}">Delete</button>
                             </td>
                         </tr>
                     `;
-                    matchupsTable.append(row);
+                    matchesTable.append(row);
                 });
             });
         }
@@ -102,42 +102,42 @@
                 });
             });
 
-            loadMatchups(); // Load matchups on page load
+            loadMatches(); // Load matches on page load
 
             // Handle form submission
             $("#createMatchupForm").submit(function(event) {
                 event.preventDefault();
-                const matchup = {
+                const match = {
                     team1: $("#team1").val(),
                     team2: $("#team2").val(),
                     bestOf: $("#bestOf").val(),
                     round: $("#round").val()
                 };
 
-                $.post("/api/matchups", matchup, function(data) {
+                $.post("/api/matches", match, function(data) {
                     // For now, just log the response
                     console.log(data);
-                    loadMatchups(); // Refresh the matchups table
+                    loadMatches(); // Refresh the matches table
                 });
             });
 
             // Handle delete button click
-            $("#matchupsTable").on("click", ".delete-matchup", function() {
+            $("#matchesTable").on("click", ".delete-match", function() {
                 const matchId = $(this).data("id");
-                if (confirm("Are you sure you want to delete this matchup?")) {
+                if (confirm("Are you sure you want to delete this match?")) {
                     $.ajax({
-                        url: "/api/matchups/" + matchId,
+                        url: "/api/matches/" + matchId,
                         type: "DELETE",
                         success: function(result) {
                             console.log(result);
-                            loadMatchups(); // Refresh the matchups table
+                            loadMatches(); // Refresh the matches table
                         }
                     });
                 }
             });
 
             // Handle "Picks/Bans" button click
-            $("#matchupsTable").on("click", ".start-pick-ban", function() {
+            $("#matchesTable").on("click", ".start-pick-ban", function() {
                 const matchId = $(this).data("id");
                 if (confirm("Are you sure you want to start the pick/ban process for this match?")) {
                     $.ajax({

@@ -5,6 +5,7 @@ const { promisify } = require('util');
 const fetch = require('node-fetch');
 const path = require('path');
 const fs = require('fs');
+const { WebSocketServer } = require('ws');
 
 const streamPipeline = promisify(pipeline);
 
@@ -146,8 +147,18 @@ function initializeBot(app, dbPool, port) {
             }
         })();
 
-        app.listen(port, () => {
+        const server = app.listen(port, () => {
             console.log(`Server running on http://localhost:${port}`);
+        });
+
+        const wss = new WebSocketServer({ server });
+        app.locals.wss = wss;
+
+        wss.on('connection', (ws) => {
+            console.log('Client connected to WebSocket');
+            ws.on('close', () => {
+                console.log('Client disconnected');
+            });
         });
     });
 
@@ -567,193 +578,190 @@ function initializeBot(app, dbPool, port) {
             }
         } else if (commandName === 'killers') {
             try {
-                // 1. Initial Fetch: Get just the list for the dropdowns
-                const [killersList] = await dbPool.query('SELECT killer_id, killer_name, art_url, allowed FROM Killers ORDER BY killer_name ASC');
-
+                const [killersList] = await dbPool.query('SELECT killer_id, killer_name, art_url, allowed FROM Killers ORDER BY allowed, killer_order ASC');
                 if (killersList.length === 0) {
                     return interaction.reply({ content: 'No killers found in the database.', ephemeral: true });
                 }
 
-                // Helper: Sorts and formats rules into a string for the Embed
                 const formatRules = (rules, targetSource, targetRole) => {
                     if (!rules) return 'None';
                     const filtered = rules.filter(r => r.source === targetSource && r.role === targetRole);
                     if (filtered.length === 0) return 'None';
-                    
-                    return filtered.map(r => `• **${r.category}:** ${r.text}`).join('\n');
+                    return filtered.map(rule => {
+                        let category = rule.category;
+                        let text = rule.text;
+                        if (category.toLowerCase().includes('offering')) {
+                            const count = (text.match(/,/g) || []).length + 1;
+                            category = `Forced Offerings (${count})`;
+                        } else if (category.toLowerCase().includes('item')) {
+                            category = 'Allowed Items';
+                        }
+                        if (text.includes(',')) {
+                            const items = text.split(',').map(item => `  - ${item.trim()}`);
+                            text = '\n' + items.join('\n');
+                        }
+                        return `• **${category}:** ${text}`;
+                    }).join('\n');
                 };
 
-                // Helper: Generates the detailed Embed for a specific killer
-                const generateDetailedEmbed = (data) => {
+                const generatePagedEmbeds = (data) => {
                     const killer = data;
                     const maps = killer.map_priorities || [];
                     const rules = killer.balancing_rules || [];
+                    const pages = [];
+                    const pageTitles = [];
 
-                    const embed = new EmbedBuilder()
-                        .setColor(killer.allowed ? '#00ff00' : '#ff0000') // Green if allowed, Red if banned
+                    // Page 1: Specific
+                    const page1 = new EmbedBuilder()
+                        .setColor(killer.allowed ? '#00ff00' : '#ff0000')
                         .setTitle(killer.killer_name)
                         .setDescription(`**Tier:** ${killer.tier_name || 'Unassigned'}\n**Playable:** ${killer.allowed ? '✅ Yes' : '❌ No'}`)
                         .setThumbnail(killer.art_url);
-
-                    // 1. MAPS
                     if (maps.length > 0) {
-                        const mapString = maps
-                            .sort((a, b) => a.priority - b.priority)
-                            .map(m => `**${m.priority}.** ${m.map}`)
-                            .join('\n');
-                        embed.addFields({ name: '🗺️ Map Priority', value: mapString });
+                        const mapString = maps.sort((a, b) => a.priority - b.priority).map(m => `**${m.priority}.** ${m.map}`).join('\n');
+                        page1.addFields({ name: '🗺️ Map Priority', value: mapString });
                     }
-
-                    // 2. SPECIFIC BALANCING (Killer)
                     const specificKiller = formatRules(rules, 'Specific', 'Killer');
-                    if (specificKiller !== 'None') {
-                        embed.addFields({ name: '🔪 Killer Specific Rules', value: specificKiller.substring(0, 1024) });
-                    }
-
-                    // 3. SPECIFIC BALANCING (Survivor)
+                    if (specificKiller !== 'None') page1.addFields({ name: '🔪 Killer Specific Rules', value: specificKiller.substring(0, 1024) });
                     const specificSurvivor = formatRules(rules, 'Specific', 'Survivor');
-                    if (specificSurvivor !== 'None') {
-                        embed.addFields({ name: '🔦 Survivor Rules (vs This Killer)', value: specificSurvivor.substring(0, 1024) });
-                    }
-
-                    // 4. TIER BALANCING
-                    const tierKiller = formatRules(rules, 'Tier', 'Killer');
-                    if (tierKiller !== 'None') {
-                        embed.addFields({ name: `⚖️ ${killer.tier_name} Rules (Killer)`, value: tierKiller.substring(0, 1024) });
-                    }
+                    if (specificSurvivor !== 'None') page1.addFields({ name: '🔦 Survivor Rules (vs This Killer)', value: specificSurvivor.substring(0, 1024) });
                     
-                    const tierSurvivor = formatRules(rules, 'Tier', 'Survivor');
-                    if (tierSurvivor !== 'None') {
-                        embed.addFields({ name: `⚖️ ${killer.tier_name} Rules (Survivor)`, value: tierSurvivor.substring(0, 1024) });
+                    if (page1.data.fields?.length > 0) {
+                        pages.push(page1);
+                        pageTitles.push('Specific Rules');
                     }
 
-                    // 5. GENERAL BALANCING (Global + Killer General)
-                    // We combine Global rules (like perk limits) and General Killer bans
+                    // Page 2: Tier
+                    const page2 = new EmbedBuilder()
+                        .setColor(killer.allowed ? '#00ff00' : '#ff0000')
+                        .setTitle(`${killer.killer_name} - Tier Rules`)
+                        .setThumbnail(killer.art_url);
+
+                    const tierKiller = formatRules(rules, 'Tier', 'Killer');
+                    const tierSurvivor = formatRules(rules, 'Tier', 'Survivor');
+ 
+                    if (tierKiller !== 'None' || tierSurvivor !== 'None') {
+                        if (tierKiller !== 'None') page2.addFields({ name: `⚖️ ${killer.tier_name} Rules (Killer)`, value: tierKiller.substring(0, 1024) });
+                        if (tierSurvivor !== 'None') page2.addFields({ name: `⚖️ ${killer.tier_name} Rules (Survivor)`, value: tierSurvivor.substring(0, 1024) });
+                        pages.push(page2);
+                        pageTitles.push('Tier Rules');
+                    }
+                    // Page 3: General
+                    const page3 = new EmbedBuilder()
+                        .setColor(killer.allowed ? '#00ff00' : '#ff0000')
+                        .setTitle(`${killer.killer_name} - General Rules`)
+                        .setThumbnail(killer.art_url);
                     const generalGlobal = formatRules(rules, 'General', 'Global');
                     const generalKiller = formatRules(rules, 'General', 'Killer');
-                    
-                    let generalText = '';
-                    if (generalGlobal !== 'None') generalText += `${generalGlobal}\n`;
-                    if (generalKiller !== 'None') generalText += `${generalKiller}`;
+                    const generalSurvivor = formatRules(rules, 'General', 'Survivor');
+                    let killerBalancing = [generalGlobal, generalKiller].filter(r => r !== 'None').join('\n');
+                    if (killerBalancing) page3.addFields({ name: '🌐 General Killer Balancing', value: killerBalancing.substring(0, 1024) });
+                    if (generalSurvivor !== 'None') page3.addFields({ name: '🌐 General Survivor Balancing', value: generalSurvivor.substring(0, 1024) });
 
-                    if (generalText.length > 0) {
-                        if (generalText.length < 1024) {
-                            embed.addFields({ name: '🌐 General Balancing', value: generalText });
-                        } else {
-                            // If too long, truncate neatly
-                            embed.addFields({ name: '🌐 General Balancing', value: generalText.substring(0, 1020) + '...' });
-                        }
+                    if (page3.data.fields?.length > 0) {
+                        pages.push(page3);
+                        pageTitles.push('General Rules');
                     }
 
-                    return embed;
+                    if (pages.length === 0) {
+                        const defaultPage = new EmbedBuilder()
+                            .setColor(killer.allowed ? '#00ff00' : '#ff0000')
+                            .setTitle(killer.killer_name)
+                            .setDescription(`**Tier:** ${killer.tier_name || 'Unassigned'}\n**Playable:** ${killer.allowed ? '✅ Yes' : '❌ No'}`)
+                            .setThumbnail(killer.art_url)
+                            .addFields({ name: 'No Rules Found', value: 'This killer has no specific, tier, or general balancing rules assigned.' });
+                        pages.push(defaultPage);
+                        pageTitles.push('No Rules');
+                    }
+                    
+                    pages.forEach((p, i) => p.setFooter({ text: `Page ${i + 1}/${pages.length}: ${pageTitles[i]}` }));
+                    return pages;
                 };
 
-                // 2. Build Dropdown Menus
                 const rows = [];
                 const killerChunks = [];
-                const MAX_KILLERS_PER_MENU = 25;
-                const MAX_MENUS = 5;
-
-                for (let i = 0; i < Math.min(killersList.length, MAX_KILLERS_PER_MENU * MAX_MENUS); i += MAX_KILLERS_PER_MENU) {
-                    killerChunks.push(killersList.slice(i, i + MAX_KILLERS_PER_MENU));
+                for (let i = 0; i < killersList.length; i += 25) {
+                    killerChunks.push(killersList.slice(i, i + 25));
                 }
-
                 killerChunks.forEach((chunk, chunkIndex) => {
-                    const startNumber = chunkIndex * MAX_KILLERS_PER_MENU + 1;
-                    const endNumber = startNumber + chunk.length - 1;
                     const selectMenu = new StringSelectMenuBuilder()
                         .setCustomId(`killer-select-${chunkIndex}`)
-                        .setPlaceholder(`Select Killer (${startNumber}-${endNumber})`)
-                        .addOptions(chunk.map((k) => ({
-                            label: k.killer_name,
-                            value: k.killer_id,
-                            description: k.allowed ? 'Allowed' : 'Banned',
-                            emoji: k.allowed ? '✅' : '❌'
-                        })));
+                        .setPlaceholder(`Select Killer (${chunkIndex * 25 + 1}-${chunkIndex * 25 + chunk.length})`)
+                        .addOptions(chunk.map(k => ({ label: k.killer_name, value: k.killer_id, description: k.allowed ? 'Allowed' : 'Banned', emoji: k.allowed ? '✅' : '❌' })));
                     rows.push(new ActionRowBuilder().addComponents(selectMenu));
                 });
 
-                // 3. Send Initial Message
-                const initialEmbed = new EmbedBuilder()
-                    .setColor('#0099ff')
-                    .setTitle('Tournament Killers')
-                    .setDescription('Select a killer from the dropdowns below to view their Tier, Maps, and Balancing rules.');
+                const initialEmbed = new EmbedBuilder().setColor('#0099ff').setTitle('Tournament Killers').setDescription('Select a killer from the dropdowns to view their rules.');
+                const message = await interaction.reply({ embeds: [initialEmbed], components: rows, ephemeral: false });
 
-                const message = await interaction.reply({
-                    embeds: [initialEmbed],
-                    components: rows,
-                    withResponse: true 
+                const collector = interaction.channel.createMessageComponentCollector({
+                    //filter: i => i.message.id === message.id && (i.isStringSelectMenu() || i.isButton()),
+                    time: 900000, // 15 minutes
+                    idle: 300000 // 5 minutes
                 });
 
-                // 4. Collector Logic
-                const collector = message.resource.message.createMessageComponentCollector({ componentType: ComponentType.StringSelect, time: 600000 });
+                let currentPages = [];
+                let currentPage = 0;
+                let selectedKillerId = '';
 
                 collector.on('collect', async i => {
                     await i.deferUpdate();
-                    
-                    const selectedKillerId = i.values[0];
 
-                    // 5. RUN THE HEAVY QUERY
-                    // We use ? placeholders to prevent "Unknown column" errors
-                    const detailedQuery = `
-                        SELECT 
-                            k.killer_name, k.art_url, t.tier_name, k.allowed,
-                            (SELECT JSON_ARRAYAGG(JSON_OBJECT('priority', priority, 'map', map_name))
-                            FROM (
-                                SELECT km.priority, m.map_name 
-                                FROM KillerMaps km 
-                                JOIN Maps m ON km.map_id = m.map_id 
-                                WHERE km.killer_id = ? 
-                                ORDER BY km.priority ASC
-                            ) as sorted_maps
-                            ) as map_priorities,
-                            (SELECT JSON_ARRAYAGG(JSON_OBJECT('source', source, 'role', role, 'category', category, 'text', rule_text))
-                            FROM (
-                                SELECT 1 as sort_order, 'General' as source, role, category, rule_text FROM TierRules WHERE tier_id = 0
-                                UNION ALL
-                                SELECT 2, 'Tier', role, category, rule_text FROM TierRules WHERE tier_id = (SELECT tier FROM Killers WHERE killer_id = ?)
-                                UNION ALL
-                                SELECT 3, 'Specific', role, category, rule_text FROM KillerRules WHERE killer_id = ?
-                                ORDER BY sort_order, role, category
-                            ) as all_rules
-                            ) as balancing_rules
-                        FROM Killers k
-                        LEFT JOIN Tiers t ON k.tier = t.tier_id
-                        WHERE k.killer_id = ?
-                    `;
-
-                    try {
-                        // Named 'dbResult' to avoid shadowing the 'rows' UI component
-                        const [dbResult] = await dbPool.query(detailedQuery, [selectedKillerId, selectedKillerId, selectedKillerId, selectedKillerId]);
+                    if (i.isStringSelectMenu()) {
+                        selectedKillerId = i.values[0];
+                        currentPage = 0;
                         
-                        if (dbResult.length > 0) {
-                            const detailedData = dbResult[0];
-                            if (typeof detailedData.map_priorities === 'string') detailedData.map_priorities = JSON.parse(detailedData.map_priorities);
-                            if (typeof detailedData.balancing_rules === 'string') detailedData.balancing_rules = JSON.parse(detailedData.balancing_rules);
-
-                            await i.editReply({
-                                embeds: [generateDetailedEmbed(detailedData)],
-                                components: rows 
-                            });
+                        const detailedQuery = `
+                            SELECT 
+                                k.killer_name, k.art_url, t.tier_name, k.allowed,
+                                (SELECT JSON_ARRAYAGG(JSON_OBJECT('priority', priority, 'map', map_name)) FROM (SELECT km.priority, m.map_name FROM KillerMaps km JOIN Maps m ON km.map_id = m.map_id WHERE km.killer_id = ? ORDER BY km.priority ASC) as sm) as map_priorities,
+                                (SELECT JSON_ARRAYAGG(JSON_OBJECT('source', source, 'role', role, 'category', category, 'text', rule_text)) FROM (SELECT 1 as o, 'General' as source, role, category, rule_text FROM TierRules WHERE tier_id = 0 UNION ALL SELECT 2, 'Tier', role, category, rule_text FROM TierRules WHERE tier_id = (SELECT tier FROM Killers WHERE killer_id = ?) UNION ALL SELECT 3, 'Specific', role, category, rule_text FROM KillerRules WHERE killer_id = ? ORDER BY o, role, category) as ar) as balancing_rules
+                            FROM Killers k
+                            LEFT JOIN Tiers t ON k.tier = t.tier_id
+                            WHERE k.killer_id = ?`;
+                        
+                        const [dbResult] = await dbPool.query(detailedQuery, [selectedKillerId, selectedKillerId, selectedKillerId, selectedKillerId]);
+                        const detailedData = dbResult[0];
+                        if (typeof detailedData.map_priorities === 'string') detailedData.map_priorities = JSON.parse(detailedData.map_priorities);
+                        if (typeof detailedData.balancing_rules === 'string') detailedData.balancing_rules = JSON.parse(detailedData.balancing_rules);
+                        
+                        currentPages = generatePagedEmbeds(detailedData);
+                    } else if (i.isButton()) {
+                        if (i.customId === 'prev_page') {
+                            currentPage = Math.max(0, currentPage - 1);
+                        } else if (i.customId === 'next_page') {
+                            currentPage = Math.min(currentPages.length - 1, currentPage + 1);
                         }
-                    } catch (err) {
-                        console.error('Error fetching detailed killer info:', err);
-                        await i.followUp({ content: 'Failed to fetch killer details.', ephemeral: true });
                     }
+
+                    const buttonRow = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId('prev_page').setLabel('◀️ Previous').setStyle(ButtonStyle.Primary).setDisabled(currentPage === 0),
+                        new ButtonBuilder().setCustomId('next_page').setLabel('Next ▶️').setStyle(ButtonStyle.Primary).setDisabled(currentPage === currentPages.length - 1)
+                    );
+                    
+                    const allComponents = [...rows];
+                    if (currentPages.length > 1) {
+                        allComponents.unshift(buttonRow);
+                    }
+
+                    await i.editReply({ embeds: [currentPages[currentPage]], components: allComponents });
                 });
 
                 collector.on('end', () => {
-                    const disabledRows = rows.map(row => {
-                        const menu = row.components[0];
-                        menu.setDisabled(true);
-                        return new ActionRowBuilder().addComponents(menu);
+                    // Edit the original message to remove all components.
+                    message.edit({ components: [] }).catch(err => {
+                        // Ignore errors if the message was already deleted.
+                        if (err.code !== 10008) console.error('Failed to remove components on collector end:', err);
                     });
-                    message.edit({ components: disabledRows }).catch(() => {});
                 });
 
             } catch (error) {
                 console.error('Error in /killers command:', error);
-                await interaction.reply({ content: 'An error occurred while fetching the killers list.', ephemeral: true });
+                if (!interaction.replied && !interaction.deferred) {
+                    await interaction.reply({ content: 'An error occurred while fetching the killers list.', ephemeral: true });
+                } else {
+                    await interaction.followUp({ content: 'An error occurred while fetching the killers list.', ephemeral: true });
+                }
             }
         } else if (commandName === 'setkillerstatus') {
             if (!interaction.member.roles.cache.has(DISCORD_ROLE_IDS.STAFF_ROLE_ID) && !interaction.member.roles.cache.has(DISCORD_ROLE_IDS.ADMIN_ROLE_ID)) {
@@ -857,7 +865,7 @@ function initializeBot(app, dbPool, port) {
         let conn;
         try {
             conn = await dbPool.getConnection();
-            const [matches] = await conn.execute('SELECT team_a_id, team_b_id FROM matchups WHERE match_id = ?', [matchId]);
+            const [matches] = await conn.execute('SELECT team_a_id, team_b_id FROM Matches WHERE match_id = ?', [matchId]);
             if (matches.length === 0) {
                 console.error(`Match with ID ${matchId} not found.`);
                 return;
