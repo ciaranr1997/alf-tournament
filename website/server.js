@@ -581,7 +581,7 @@ app.post('/api/staff/create-team', requireRole(ROLES.STAFF), async (req, res) =>
     }
 
     // Validate if the roleColor is in the predefined TEAM_COLORS
-    if (!TEAM_COLORS.includes(roleColor.toUpperCase())) {
+    if (!TEAM_COLORS.includes(roleColor)) {
         return res.status(400).json({ message: 'Invalid color. Please choose from the available colors.' });
     }
 
@@ -1661,7 +1661,7 @@ app.post('/api/captain/team/color', requireRole(ROLES.CAPTAIN), async (req, res)
     }
 
     // Validate if the newColor is in the predefined TEAM_COLORS
-    if (!TEAM_COLORS.includes(newColor.toUpperCase())) {
+    if (!TEAM_COLORS.includes(newColor)) {
         return res.status(400).json({ message: 'Invalid color. Please choose from the available colors.' });
     }
 
@@ -1813,13 +1813,13 @@ app.put('/api/staff/teams/:id', requireRole(ROLES.STAFF), upload.single('logo'),
         }
 
         if (roleColor) { // Only validate if roleColor is provided in the request
-            if (!TEAM_COLORS.includes(roleColor.toUpperCase())) {
+            if (!TEAM_COLORS.includes(roleColor)) {
                 await conn.rollback();
                 return res.status(400).json({ message: 'Invalid color. Please choose from the available colors.' });
             }
         }
 
-        if (oldRoleId && roleColor && roleColor.toUpperCase() !== oldRoleColor) {
+        if (oldRoleId && roleColor && roleColor !== oldRoleColor) {
             try {
                 const role = await guild.roles.fetch(oldRoleId);
                 if (role) {
@@ -1869,7 +1869,7 @@ app.put('/api/staff/teams/:id', requireRole(ROLES.STAFF), upload.single('logo'),
                 if (oldCaptainId.toString() !== captainId) {
                     changes.push(`**Captain:** <@${oldCaptainId}> -> <@${captainId}>`);
                 }
-                if (roleColor && roleColor.toUpperCase() !== oldRoleColor) {
+                if (roleColor && roleColor !== oldRoleColor) {
                     changes.push(`**Color:** ${oldRoleColor || 'Default'} -> ${roleColor}`);
                 }
                 // A more complex diff could be done for members if needed

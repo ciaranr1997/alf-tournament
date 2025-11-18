@@ -223,7 +223,7 @@
                     $titles.css('padding-left', `${$firstRound.position().left}px`);
                 }
 
-                for (let i = 0; i < roundCount; i++) {
+                for (let i = 0; i < roundCount && i<4; i++) {
                     let $title = $('<div></div>').addClass('title').text(titles[i] || `Round ${i+1}`).css({ 
                         'text-align': 'center', 
                         'flex-grow': 0, 

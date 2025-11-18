@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, SlashCommandBuilder, Routes, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, ComponentType } = require('discord.js');
+const { Client, GatewayIntentBits, SlashCommandBuilder, Routes, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, ComponentType, AttachmentBuilder } = require('discord.js');
 const { REST } = require('@discordjs/rest');
 const { pipeline } = require('stream');
 const { promisify } = require('util');
@@ -126,9 +126,56 @@ function initializeBot(app, dbPool, port) {
                     .setDescription('Staff: Creates voice channels for teams that are missing them.')
                     .setDefaultMemberPermissions(0); // Only for admins/staff
 
-                const dynamicCommands = [dynamicChangeColorCommand.toJSON(), changeTeamNameCommand.toJSON(), setTeamLogoCommand.toJSON(), addPlayerCommand.toJSON(), killersCommand.toJSON(), setKillerStatusCommand.toJSON(), createMissingVoiceChannelsCommand.toJSON()];
+                const playerProfileCommand = new SlashCommandBuilder()
+                    .setName('player')
+                    .setDescription("Get a player's profile, including their team and stats.")
+                    .addStringOption(option =>
+                        option.setName('player')
+                            .setDescription('The player to look up.')
+                            .setRequired(true)
+                            .setAutocomplete(true));
+                
+                const editProfileCommand = new SlashCommandBuilder()
+                    .setName('editprofile')
+                    .setDescription('Update your player profile (platform, region, hours). Must be on a team to use.')
+                    .addStringOption(option =>
+                        option.setName('platform')
+                            .setDescription('The platform you play on.')
+                            .setRequired(false)
+                            .addChoices(
+                                { name: 'PC (Steam)', value: 'PC' },
+                                { name: 'PlayStation', value: 'PlayStation' },
+                                { name: 'Xbox', value: 'Xbox' },
+                                { name: 'Nintendo Switch', value: 'Switch' }
+                            ))
+                    .addStringOption(option =>
+                        option.setName('region')
+                            .setDescription('Your competitive region.')
+                            .setRequired(false)
+                            .addChoices(
+                                { name: 'North America (NA)', value: 'NA' },
+                                { name: 'Europe (EU)', value: 'EU' },
+                                { name: 'South America (SA)', value: 'SA' },
+                                { name: 'Asia (AS)', value: 'AS' },
+                                { name: 'Oceania (OC)', value: 'OC' }
+                            ))
+                    .addIntegerOption(option =>
+                        option.setName('hours')
+                            .setDescription('Your total hours played in the game.')
+                            .setRequired(false)
+                            .setMinValue(0));
+                
+                const teamProfileCommand = new SlashCommandBuilder()
+                    .setName('team')
+                    .setDescription("Get a team's profile, including its roster and player stats.")
+                    .addStringOption(option =>
+                        option.setName('team')
+                            .setDescription('The team to look up.')
+                            .setRequired(true)
+                            .setAutocomplete(true));
 
                 const rest = new REST({ version: '10' }).setToken(DISCORD_BOT_TOKEN);
+                const dynamicCommands = [dynamicChangeColorCommand, changeTeamNameCommand, setTeamLogoCommand, addPlayerCommand, killersCommand, setKillerStatusCommand, createMissingVoiceChannelsCommand, playerProfileCommand, editProfileCommand, teamProfileCommand].map(cmd => cmd.toJSON());
                 console.log('Started refreshing application (/) commands.');
 
                 await rest.put(
@@ -179,7 +226,37 @@ function initializeBot(app, dbPool, port) {
                     console.error('Error fetching killer names for autocomplete:', error);
                     await interaction.respond([]);
                 }
+            } else if (focusedOption.name === 'player') {
+                try {
+                    // We fetch both username and user_id. We show the username, but the value will be the ID.
+                    const [users] = await dbPool.query(`
+                        SELECT u.user_id, u.username 
+                        FROM Users u
+                        JOIN TeamMembers tm ON u.user_id = tm.user_id
+                        ORDER BY u.username ASC`);
+                    
+                    const filtered = users.filter(choice => choice.username.toLowerCase().includes(focusedOption.value.toLowerCase())).slice(0, 25);
+                    await interaction.respond(
+                        filtered.map(choice => ({ name: choice.username, value: choice.user_id })),
+                    );
+                } catch (error) {
+                    console.error('Error fetching user names for autocomplete:', error);
+                    await interaction.respond([]);
+                }
+            } else if (focusedOption.name === 'team') {
+                try {
+                    const [teams] = await dbPool.query('SELECT team_name FROM Teams ORDER BY team_name ASC');
+                    
+                    const filtered = teams.filter(choice => choice.team_name.toLowerCase().includes(focusedOption.value.toLowerCase())).slice(0, 25);
+                    await interaction.respond(
+                        filtered.map(choice => ({ name: choice.team_name, value: choice.team_name })),
+                    );
+                } catch (error) {
+                    console.error('Error fetching team names for autocomplete:', error);
+                    await interaction.respond([]);
+                }
             }
+
             return;
         }
 
@@ -578,7 +655,7 @@ function initializeBot(app, dbPool, port) {
             }
         } else if (commandName === 'killers') {
             try {
-                const [killersList] = await dbPool.query('SELECT killer_id, killer_name, art_url, allowed FROM Killers ORDER BY allowed, killer_order ASC');
+                const [killersList] = await dbPool.query('SELECT killer_id, killer_name, art_url, allowed FROM Killers ORDER BY allowed DESC, killer_order ASC');
                 if (killersList.length === 0) {
                     return interaction.reply({ content: 'No killers found in the database.', ephemeral: true });
                 }
@@ -848,6 +925,205 @@ function initializeBot(app, dbPool, port) {
             } catch (error) {
                 console.error('Error in /createmissingvoicechannels command:', error);
                 await interaction.editReply({ content: 'An error occurred while processing the request.' });
+            } finally {
+                if (conn) conn.release();
+            }
+        } else if (commandName === 'player') {
+            const userId = interaction.options.getString('player');
+            let conn;
+            try {
+                conn = await dbPool.getConnection();
+                const [[playerData]] = await conn.execute(
+                    `SELECT u.username, u.hours, u.region, u.platform, t.team_name, t.role_id 
+                     FROM Users u 
+                     LEFT JOIN TeamMembers tm ON u.user_id = tm.user_id 
+                     LEFT JOIN Teams t ON tm.team_id = t.team_id 
+                      WHERE u.user_id = ?`,
+                    [userId]
+                );
+
+                if (!playerData) {
+                    return interaction.reply({ content: 'Could not find that player in the database.', ephemeral: true });
+                }
+
+                const discordUser = await bot.users.fetch(userId);
+
+                let embedColor = '#5865F2'; // Default Discord Blurple
+                if (playerData.role_id) {
+                    try {
+                        const teamRole = await interaction.guild.roles.fetch(playerData.role_id);
+                        if (teamRole && teamRole.color) {
+                            embedColor = teamRole.color;
+                        }
+                    } catch (roleError) {
+                        console.warn(`Could not fetch role ${playerData.role_id} to get color for player profile.`);
+                    }
+                }
+                const profileEmbed = new EmbedBuilder()
+                    .setColor(embedColor)
+                    .setTitle(`${playerData.username}'s Profile`)
+                    .setThumbnail(discordUser.displayAvatarURL())
+                    .addFields(
+                        { name: 'Team', value: playerData.team_name || 'Not on a team', inline: true }
+                    )
+                    .setTimestamp();
+
+                // Add stats only if they are available (not 0 or null)
+                if (playerData.hours) {
+                    profileEmbed.addFields({ name: 'Hours Played', value: `${playerData.hours}`, inline: true });
+                }
+                if (playerData.region) {
+                    profileEmbed.addFields({ name: 'Region', value: playerData.region, inline: true });
+                }
+                if (playerData.platform) {
+                    profileEmbed.addFields({ name: 'Platform', value: playerData.platform, inline: true });
+                }
+
+                await interaction.reply({ embeds: [profileEmbed] });
+
+            } catch (error) {
+                console.error('Error in /player command:', error);
+                await interaction.reply({ content: 'An error occurred while fetching the player profile.', ephemeral: true });
+            } finally {
+                if (conn) conn.release();
+            }
+        } else if (commandName === 'editprofile') {
+            const platform = interaction.options.getString('platform');
+            const region = interaction.options.getString('region');
+            const hours = interaction.options.getInteger('hours');
+            const userId = interaction.user.id;
+
+            if (!platform && !region && hours === null) {
+                return interaction.reply({ content: 'You must provide at least one option to update.', ephemeral: true });
+            }
+
+            let conn;
+            try {
+                conn = await dbPool.getConnection();
+
+                // 1. Check if the user is on a team
+                const [teamMembers] = await conn.execute('SELECT team_id FROM TeamMembers WHERE user_id = ?', [userId]);
+                if (teamMembers.length === 0) {
+                    return interaction.reply({ content: 'You must be on a team to set your profile stats.', ephemeral: true });
+                }
+
+                // 2. Build the update query dynamically
+                const updates = [];
+                const values = [];
+                const changes = [];
+
+                if (platform) {
+                    updates.push('`platform` = ?');
+                    values.push(platform);
+                    changes.push(`**Platform:** ${platform}`);
+                }
+                if (region) {
+                    updates.push('`region` = ?');
+                    values.push(region);
+                    changes.push(`**Region:** ${region}`);
+                }
+                if (hours !== null) {
+                    updates.push('`hours` = ?');
+                    values.push(hours);
+                    changes.push(`**Hours:** ${hours}`);
+                }
+
+                values.push(userId); // For the WHERE clause
+
+                const sql = `UPDATE Users SET ${updates.join(', ')} WHERE user_id = ?`;
+                await conn.execute(sql, values);
+
+                const successEmbed = new EmbedBuilder()
+                    .setColor('#57F287') // Green
+                    .setTitle('Profile Updated!')
+                    .setDescription(`Your profile has been updated with the following information:\n\n${changes.join('\n')}`);
+
+                await interaction.reply({ embeds: [successEmbed], ephemeral: true });
+
+            } catch (error) {
+                console.error('Error in /editprofile command:', error);
+                await interaction.reply({ content: 'An error occurred while updating your profile.', ephemeral: true });
+            } finally {
+                if (conn) conn.release();
+            }
+        } else if (commandName === 'team') {
+            const teamName = interaction.options.getString('team');
+            let conn;
+            try {
+                conn = await dbPool.getConnection();
+
+                // 1. Get Team Info, including the new 'color' column
+                const [[teamData]] = await conn.execute(
+                    'SELECT team_id, team_name, logo_url, role_id, captain_id, color FROM Teams WHERE team_name = ?',
+                    [teamName]
+                );
+
+                if (!teamData) {
+                    return interaction.reply({ content: `Could not find a team named "${teamName}".`, ephemeral: true });
+                }
+
+                // 2. Get Team Members and their stats, excluding the captain from this list
+                const [members] = await conn.execute(`
+                    SELECT u.user_id, u.username, u.hours, u.region, u.platform
+                    FROM Users u
+                    JOIN TeamMembers tm ON u.user_id = tm.user_id
+                    WHERE tm.team_id = ? AND u.user_id != ?
+                    ORDER BY u.username ASC
+                `, [teamData.team_id, teamData.captain_id]);
+
+                // 3. Get Captain's info
+                const [[captain]] = await conn.execute(`
+                    SELECT user_id, username, hours, region, platform
+                    FROM Users
+                    WHERE user_id = ?
+                `, [teamData.captain_id]);
+
+                // 4. Build the Embed
+                let embedColor = teamData.color || '#5865F2'; // Use DB color, fallback to default
+                if (!teamData.color && teamData.role_id) { // If no DB color, try role color
+                    try {
+                        const teamRole = await interaction.guild.roles.fetch(teamData.role_id);
+                        if (teamRole && teamRole.color) embedColor = teamRole.color;
+                    } catch (e) { /* ignore if role not found */ }
+                }
+
+                const teamEmbed = new EmbedBuilder()
+                    .setColor(embedColor)
+                    .setTitle(`Team Profile: ${teamData.team_name}`)
+                    .setTimestamp();
+
+                let logoAttachment = null;
+                if (teamData.logo_url) {
+                    const logoFilename = path.basename(teamData.logo_url);
+                    const localLogoPath = path.join(__dirname, '..', 'public', 'uploads', logoFilename);
+
+                    if (fs.existsSync(localLogoPath)) {
+                        logoAttachment = new AttachmentBuilder(localLogoPath, { name: logoFilename });
+                        teamEmbed.setThumbnail(`attachment://${logoFilename}`);
+                    } else {
+                        console.warn(`Logo file not found for team ${teamData.team_name} at path: ${localLogoPath}`);
+                    }
+                }
+
+                // Function to format player stats
+                const formatPlayer = (player, isCaptain = false) => {
+                    const stats = [
+                        player.hours ? `**H:** ${player.hours}` : null,
+                        player.region ? `**R:** ${player.region}` : null,
+                        player.platform ? `**P:** ${player.platform}` : null
+                    ].filter(Boolean).join(' | ');
+                    return `**${player.username}** ${isCaptain ? '©️' : ''}\n${stats || 'No stats available'}`;
+                };
+
+                if (captain) teamEmbed.addFields({ name: 'Captain', value: formatPlayer(captain, true) });
+                if (members.length > 0) {
+                    teamEmbed.addFields({ name: 'Players', value: members.map(p => formatPlayer(p)).join('\n\n') });
+                }
+
+                await interaction.reply({ embeds: [teamEmbed], files: logoAttachment ? [logoAttachment] : [] });
+            } catch (error) {
+                console.error('Error in /team command:', error);
+                await interaction.reply({ content: 'An error occurred while fetching the team profile.', ephemeral: true });
             } finally {
                 if (conn) conn.release();
             }
