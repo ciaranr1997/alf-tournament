@@ -28,6 +28,8 @@ function initializeBot(app, dbPool, port) {
         ],
     });
 
+    bot.pickBanSessions = new Map();
+
     bot.once('clientReady', () => {
         console.log(`Discord bot logged in as ${bot.user.tag}!`);
         app.locals.bot = bot;
@@ -174,8 +176,12 @@ function initializeBot(app, dbPool, port) {
                             .setRequired(true)
                             .setAutocomplete(true));
 
+                const startPickBanCommand = new SlashCommandBuilder()
+                    .setName('startpickban')
+                    .setDescription('Staff: Starts the pick/ban process for the match in this channel.');
+
                 const rest = new REST({ version: '10' }).setToken(DISCORD_BOT_TOKEN);
-                const dynamicCommands = [dynamicChangeColorCommand, changeTeamNameCommand, setTeamLogoCommand, addPlayerCommand, killersCommand, setKillerStatusCommand, createMissingVoiceChannelsCommand, playerProfileCommand, editProfileCommand, teamProfileCommand].map(cmd => cmd.toJSON());
+                const dynamicCommands = [dynamicChangeColorCommand, changeTeamNameCommand, setTeamLogoCommand, addPlayerCommand, killersCommand, setKillerStatusCommand, createMissingVoiceChannelsCommand, playerProfileCommand, editProfileCommand, teamProfileCommand, startPickBanCommand].map(cmd => cmd.toJSON());
                 console.log('Started refreshing application (/) commands.');
 
                 await rest.put(
@@ -1127,8 +1133,264 @@ function initializeBot(app, dbPool, port) {
             } finally {
                 if (conn) conn.release();
             }
+        } else if (commandName === 'startpickban') {
+            if (!interaction.member.roles.cache.has(DISCORD_ROLE_IDS.STAFF_ROLE_ID)) {
+                return interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
+            }
+
+            const channelId = interaction.channel.id;
+            let conn;
+            try {
+                conn = await dbPool.getConnection();
+                await conn.beginTransaction();
+
+                // Find a pending pick/ban session for this channel
+                const [pickBans] = await conn.execute(
+                    'SELECT pick_ban_id, match_id FROM PickBans WHERE channel_id = ? AND status = \'PENDING\' ORDER BY created_at DESC LIMIT 1',
+                    [channelId]
+                );
+
+                if (pickBans.length === 0) {
+                    await conn.rollback();
+                    return interaction.reply({ content: 'No pending pick/ban session found for this channel.', ephemeral: true });
+                }
+
+                const { pick_ban_id, match_id } = pickBans[0];
+
+                // Check if a session entry already exists, if not create one.
+                const [sessions] = await conn.execute('SELECT pick_ban_id FROM PickBanSessions WHERE pick_ban_id = ?', [pick_ban_id]);
+                if (sessions.length === 0) {
+                    await conn.execute(
+                        'INSERT INTO PickBanSessions (pick_ban_id, match_id, banned_killers, picked_killers) VALUES (?, ?, ?, ?)',
+                        [pick_ban_id, match_id, JSON.stringify([]), JSON.stringify({ team_a: null, team_b: null, tiebreaker: null })]
+                    );
+                }
+                
+                // Update the status to IN_PROGRESS
+                await conn.execute('UPDATE PickBans SET status = \'IN_PROGRESS\' WHERE pick_ban_id = ?', [pick_ban_id]);
+
+                await conn.commit();
+
+                // Pass the interaction directly to runPickBanProcess.
+                // It will be responsible for replying to the interaction.
+                await interaction.deferReply();
+                bot.runPickBanProcess(interaction, match_id, pick_ban_id);
+
+            } catch (error) {
+                if (conn) await conn.rollback();
+                console.error('Error in /startpickban command:', error);
+                if (!interaction.replied && !interaction.deferred) {
+                    await interaction.reply({ content: 'An error occurred while trying to start the pick/ban process.', ephemeral: true });
+                } else {
+                    await interaction.editReply({ content: 'An error occurred while trying to start the pick/ban process.' });
+                }
+            } finally {
+                if (conn) conn.release();
+            }
         }
     });
+
+    bot.runPickBanProcess = async function(interaction, matchId, pickBanId) {
+        let conn;
+        try {
+            conn = await dbPool.getConnection();
+
+            // 1. Get all necessary data in parallel
+            const [
+                [matches],
+                [allKillers],
+                [sessions]
+            ] = await Promise.all([
+                conn.execute(`
+                    SELECT m.team_a_id, m.team_b_id, 
+                           tA.team_name as team_a_name, tA.captain_id as team_a_captain_id,
+                           tB.team_name as team_b_name, tB.captain_id as team_b_captain_id
+                    FROM Matches m
+                    JOIN Teams tA ON m.team_a_id = tA.team_id
+                    JOIN Teams tB ON m.team_b_id = tB.team_id
+                    WHERE m.match_id = ?
+                `, [matchId]),
+                conn.execute('SELECT killer_id, killer_name, art_url FROM Killers WHERE allowed = 1 ORDER BY killer_order ASC'),
+                conn.execute('SELECT * FROM PickBanSessions WHERE pick_ban_id = ?', [pickBanId])
+            ]);
+
+            if (matches.length === 0) throw new Error('Match not found.');
+            const match = matches[0];
+
+            // 2. Get or create Pick/Ban session
+            let session = sessions[0];
+            if (!session) {
+                await conn.execute(
+                    'INSERT INTO PickBanSessions (pick_ban_id, match_id, banned_killers, picked_killers) VALUES (?, ?, ?, ?)',
+                    [pickBanId, matchId, JSON.stringify([]), JSON.stringify({ team_a: null, team_b: null, tiebreaker: null })]
+                );
+                const [newSessions] = await conn.execute('SELECT * FROM PickBanSessions WHERE pick_ban_id = ?', [pickBanId]);
+                session = newSessions[0];
+            }
+
+            const bannedKillersList = JSON.parse(session.banned_killers || '[]');
+            const pickedKillersData = JSON.parse(session.picked_killers || '{}');
+
+            // 3. Determine available killers
+            const pickedIds = Object.values(pickedKillersData).filter(id => id).map(id => parseInt(id, 10));
+            const unavailableIds = new Set([...bannedKillersList, ...pickedIds]);
+            let availableKillers = allKillers.filter(k => !unavailableIds.has(k.killer_id));
+
+            // 4. Determine next action
+            let nextAction = 'Completed';
+            let nextTeamId = null;
+            let nextCaptainId = null;
+            let actionType = ''; // 'pick' or 'ban'
+
+            if (!pickedKillersData.team_a) {
+                actionType = 'pick';
+                nextAction = `Team A Pick (${match.team_a_name})`;
+                nextTeamId = match.team_a_id;
+                nextCaptainId = match.team_a_captain_id;
+            } else if (!pickedKillersData.team_b) {
+                actionType = 'pick';
+                nextAction = `Team B Pick (${match.team_b_name})`;
+                nextTeamId = match.team_b_id;
+                nextCaptainId = match.team_b_captain_id;
+            } else {
+                actionType = 'ban';
+                if (availableKillers.length > 1) {
+                    if (bannedKillersList.length % 2 === 0) { // Team A's turn to ban
+                        nextAction = `Team A Ban (${match.team_a_name})`;
+                        nextTeamId = match.team_a_id;
+                        nextCaptainId = match.team_a_captain_id;
+                    } else { // Team B's turn to ban
+                        nextAction = `Team B Ban (${match.team_b_name})`;
+                        nextTeamId = match.team_b_id;
+                        nextCaptainId = match.team_b_captain_id;
+                    }
+                }
+            }
+
+            // 5. Handle automatic tiebreaker selection
+            if (availableKillers.length === 1 && !pickedKillersData.tiebreaker) {
+                const tiebreakerKiller = availableKillers[0];
+                pickedKillersData.tiebreaker = tiebreakerKiller.killer_id;
+                await conn.execute('UPDATE PickBanSessions SET picked_killers = ? WHERE pick_ban_id = ?', [JSON.stringify(pickedKillersData), pickBanId]);
+                
+                availableKillers = [];
+                nextAction = 'Completed';
+                actionType = '';
+            }
+
+            if (nextAction !== 'Completed' && !nextCaptainId) {
+                throw new Error(`The next team in the sequence (ID: ${nextTeamId}) does not have a captain assigned. The pick/ban process cannot continue.`);
+            }
+
+            // 6. Construct Embed
+            const teamAPick = pickedKillersData.team_a ? allKillers.find(k => k.killer_id === pickedKillersData.team_a) : null;
+            const teamBPick = pickedKillersData.team_b ? allKillers.find(k => k.killer_id === pickedKillersData.team_b) : null;
+            const tiebreaker = pickedKillersData.tiebreaker ? allKillers.find(k => k.killer_id === pickedKillersData.tiebreaker) : null;
+            const bannedKillers = bannedKillersList.map(id => allKillers.find(k => k.killer_id === id)).filter(Boolean);
+
+            const embed = new EmbedBuilder()
+                .setTitle(`Match: ${match.team_a_name} vs ${match.team_b_name}`)
+                .setColor(nextAction === 'Completed' ? '#57F287' : '#FEE75C')
+                .addFields(
+                    { name: `${match.team_a_name}'s Pick`, value: teamAPick ? `> ${teamAPick.killer_name}` : '> *Waiting...*', inline: true },
+                    { name: `${match.team_b_name}'s Pick`, value: teamBPick ? `> ${teamBPick.killer_name}` : '> *Waiting...*', inline: true },
+                    { name: 'Tiebreaker', value: tiebreaker ? `> ${tiebreaker.killer_name}` : '> *To be determined...*', inline: true },
+                    { name: 'Banned Killers', value: bannedKillers.length > 0 ? bannedKillers.map(k => `> ${k.killer_name}`).join('\n') : '> *None*', inline: false }
+                )
+                .setFooter({ text: `Match ID: ${matchId}` });
+
+            if (nextAction !== 'Completed') {
+                embed.addFields({ name: 'Next Action', value: `**${nextAction}**\nIt's <@${nextCaptainId}>'s turn to **${actionType}** a killer.` });
+            } else {
+                embed.setTitle(`Picks & Bans Complete: ${match.team_a_name} vs ${match.team_b_name}`);
+                embed.setDescription('The pick and ban phase is finished. Good luck to both teams!');
+            }
+
+            // 7. Build Action Row (Dropdown Menu)
+            const components = [];
+            if (nextAction !== 'Completed' && availableKillers.length > 0) {
+                const killerChunks = [];
+                for (let i = 0; i < availableKillers.length; i += 25) {
+                    killerChunks.push(availableKillers.slice(i, i + 25));
+                }
+
+                killerChunks.forEach((chunk, index) => {
+                    const selectMenu = new StringSelectMenuBuilder()
+                        .setCustomId(`pickban_${actionType}_${matchId}_${nextTeamId}_${index}`)
+                        .setPlaceholder(`Select a killer to ${actionType}... (Part ${index + 1})`)
+                        .addOptions(chunk.map(k => ({
+                            label: k.killer_name,
+                            value: k.killer_id.toString()
+                        })));
+                    components.push(new ActionRowBuilder().addComponents(selectMenu));
+                });
+            }
+
+            // 8. Send or Edit the message
+            // All interactions reaching this function are deferred, so we always edit the reply.
+            const replyMessage = await interaction.editReply({ embeds: [embed], components, fetchReply: true });
+            console.log(`Updated pick/ban message for match ${matchId}. Next action: ${nextAction}`);
+            if (nextAction === 'Completed') return; // End the process
+
+            // 9. Wait for the next interaction on the message we just sent/edited
+            const filter = i => i.customId.startsWith(`pickban_${actionType}_${matchId}_${nextTeamId}`) && i.user.id === nextCaptainId;
+            const collector = replyMessage.createMessageComponentCollector({ filter, time: 6000000, max: 1 }); // 5 minute timeout
+
+            collector.on('collect', async i => {
+                try {
+                    await i.deferUpdate();
+                    const killerId = i.values[0];
+                    let updateConn;
+                    try {
+                        updateConn = await dbPool.getConnection();
+                        await updateConn.beginTransaction();
+                        console.log(`User ${i.user.username} selected killer ID ${killerId} for ${actionType} in match ${matchId}`);
+                        if (actionType === 'pick') {
+                            const teamIdentifier = match.team_a_id.toString() === nextTeamId.toString() ? 'team_a' : 'team_b';
+                            pickedKillersData[teamIdentifier] = killerId;
+                            await updateConn.execute('UPDATE PickBanSessions SET picked_killers = ? WHERE pick_ban_id = ?', [JSON.stringify(pickedKillersData), pickBanId]);
+                        } else { // ban
+                            bannedKillersList.push(killerId);
+                            await updateConn.execute('UPDATE PickBanSessions SET banned_killers = ? WHERE pick_ban_id = ?', [JSON.stringify(bannedKillersList), pickBanId]);
+                        }
+                        await updateConn.commit();
+                    } catch (error) {
+                        if (updateConn) await updateConn.rollback();
+                        console.error(`Error updating pick/ban for match ${matchId}:`, error);
+                        await i.followUp({ content: 'There was an error saving your selection. Please try again.', ephemeral: true });
+                        return;
+                    } finally {
+                        if (updateConn) updateConn.release();
+                    }
+
+                    // Recursively call the function to continue the process, now awaited
+                    await bot.runPickBanProcess(i, matchId, pickBanId);
+                } catch (collectorError) {
+                    console.error(`Fatal error in pick/ban collector for match ${matchId}:`, collectorError);
+                    // Try to notify the user that something went very wrong.
+                    await i.followUp({ content: 'A fatal error occurred while processing your action. The pick/ban process is halted. Please contact staff.', ephemeral: true }).catch(e => {
+                        console.error('Failed to send follow-up error message in collector:', e);
+                    });
+                }
+            });
+
+            collector.on('end', collected => {
+                if (collected.size === 0) {
+                    interaction.editReply({ content: `The pick/ban for Match ${matchId} has timed out. A staff member will need to restart it.`, embeds: [], components: [] });
+                }
+            });
+
+        } catch (error) {
+            console.error(`Error in runPickBanProcess for match ${matchId}:`, error);
+            if (interaction.replied || interaction.deferred) {
+                await interaction.followUp({ content: 'A critical error occurred during the pick/ban process. Please contact a staff member.', ephemeral: true });
+            } else {
+                await interaction.reply({ content: 'A critical error occurred during the pick/ban process. Please contact a staff member.', ephemeral: true });
+            }
+        } finally {
+            if (conn) conn.release();
+        }
+    };
 
     bot.startPickBan = async function(matchId, initiatingUser) {
         console.log(`Pick/ban process initiated for match ${matchId} by ${initiatingUser.username}`);
@@ -1141,87 +1403,119 @@ function initializeBot(app, dbPool, port) {
         let conn;
         try {
             conn = await dbPool.getConnection();
-            const [matches] = await conn.execute('SELECT team_a_id, team_b_id FROM Matches WHERE match_id = ?', [matchId]);
+            const [matches] = await conn.execute(
+                `SELECT m.team_a_id, m.team_b_id, 
+                        tA.team_name as team_a_name, tA.captain_id as team_a_captain_id, 
+                        tB.team_name as team_b_name, tB.captain_id as team_b_captain_id
+                 FROM Matches m
+                 JOIN Teams tA ON m.team_a_id = tA.team_id
+                 JOIN Teams tB ON m.team_b_id = tB.team_id
+                 WHERE m.match_id = ?`, [matchId]
+            );
+
             if (matches.length === 0) {
-                console.error(`Match with ID ${matchId} not found.`);
-                return;
+                throw new Error(`Match with ID ${matchId} not found or is missing team data.`);
             }
             const match = matches[0];
 
-            if (!match.team_a_id || !match.team_b_id) {
-                console.error(`Match ${matchId} does not have two teams assigned.`);
-                // Optionally, notify the initiating user in Discord
-                return;
+            if (!match.team_a_captain_id || !match.team_b_captain_id) {
+                throw new Error(`One or both teams in match ${matchId} do not have a captain.`);
             }
 
-            const [teamA_rows] = await conn.execute('SELECT team_name, captain_id FROM Teams WHERE team_id = ?', [match.team_a_id]);
-            const [teamB_rows] = await conn.execute('SELECT team_name, captain_id FROM Teams WHERE team_id = ?', [match.team_b_id]);
-
-            if (teamA_rows.length === 0 || teamB_rows.length === 0) {
-                console.error(`Could not find one or both teams for match ${matchId}.`);
-                return;
-            }
-            const teamA = teamA_rows[0];
-            const teamB = teamB_rows[0];
-
-            if (!teamA.captain_id || !teamB.captain_id) {
-                console.error(`One or both teams in match ${matchId} do not have a captain.`);
-                return;
-            }
-
-            const channelName = `${teamA.team_name}-vs-${teamB.team_name}`.toLowerCase().replace(/\s+/g, '-');
+            const channelName = `${match.team_a_name}-vs-${match.team_b_name}`.toLowerCase().replace(/\s+/g, '-');
             const matchCategory = '1438849202733056133';
 
-            const teamACaptainMember = await guild.members.fetch(teamA.captain_id);
-            const teamBCaptainMember = await guild.members.fetch(teamB.captain_id);
+            const teamACaptainMember = await guild.members.fetch(match.team_a_captain_id);
+            const teamBCaptainMember = await guild.members.fetch(match.team_b_captain_id);
 
-            const newChannel = await guild.channels.create({
+            const channel = await guild.channels.create({
                 name: channelName,
                 type: 0, // GUILD_TEXT
                 parent: matchCategory,
+                topic: `Match ID: ${matchId}. Pick and ban channel for ${match.team_a_name} vs ${match.team_b_name}.`,
                 permissionOverwrites: [
-                    {
-                        id: guild.id, // @everyone
-                        deny: ['ViewChannel'],
-                    },
-                    {
-                        id: teamACaptainMember.id,
-                        allow: ['ViewChannel', 'SendMessages'],
-                    },
-                    {
-                        id: teamBCaptainMember.id,
-                        allow: ['ViewChannel', 'SendMessages'],
-                    },
-                    {
-                        id: DISCORD_ROLE_IDS.STAFF_ROLE_ID,
-                        allow: ['ViewChannel', 'SendMessages', 'ManageMessages'],
-                    },
-                     {
-                        id: DISCORD_ROLE_IDS.ADMIN_ROLE_ID,
-                        allow: ['ViewChannel', 'SendMessages', 'ManageMessages'],
-                    }
+                    { id: guild.id, deny: ['ViewChannel'] },
+                    { id: bot.user.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] },
+                    { id: teamACaptainMember.id, allow: ['ViewChannel', 'SendMessages'] },
+                    { id: teamBCaptainMember.id, allow: ['ViewChannel', 'SendMessages'] },
+                    { id: DISCORD_ROLE_IDS.STAFF_ROLE_ID, allow: ['ViewChannel', 'SendMessages', 'ManageMessages'] },
+                    { id: DISCORD_ROLE_IDS.ADMIN_ROLE_ID, allow: ['ViewChannel', 'SendMessages', 'ManageMessages'] }
                 ],
             });
 
-            const embed = new EmbedBuilder()
+            await conn.execute(
+                'INSERT INTO PickBans (match_id, team_a_id, team_b_id, channel_id, status) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE channel_id = VALUES(channel_id), status = VALUES(status)',
+                [matchId, match.team_a_id, match.team_b_id, channel.id, 'PENDING']
+            );
+
+            const [pickBans] = await conn.execute('SELECT pick_ban_id FROM PickBans WHERE match_id = ?', [matchId]);
+            if (pickBans.length === 0) {
+                throw new Error(`Failed to create or find a pick/ban entry for match ${matchId}`);
+            }
+            const pickBanId = pickBans[0].pick_ban_id;
+
+            const initialEmbed = new EmbedBuilder()
                 .setColor('#0099ff')
-                .setTitle(`Match: ${teamA.team_name} vs ${teamB.team_name}`)
-                .setDescription('Welcome Captains! The pick and ban phase has begun.')
+                .setTitle(`Match: ${match.team_a_name} vs ${match.team_b_name}`)
+                .setDescription('Welcome Captains! The pick and ban phase is about to begin.')
                 .addFields(
-                    { name: 'Team A', value: `<@${teamA.captain_id}>`, inline: true },
-                    { name: 'Team B', value: `<@${teamB.captain_id}>`, inline: true },
-                    { name: 'Instructions', value: 'The interactive pick/ban process will be implemented soon. For now, please coordinate with the staff member who initiated this.' }
+                    { name: 'Team A', value: `<@${match.team_a_captain_id}>`, inline: true },
+                    { name: 'Team B', value: `<@${match.team_b_captain_id}>`, inline: true }
                 )
                 .setFooter({ text: `Match ID: ${matchId} | Initiated by ${initiatingUser.username}` });
+            
+            const startButton = new ButtonBuilder()
+                .setCustomId(`start-pickban-button_${matchId}`)
+                .setLabel('Start Pick & Ban')
+                .setStyle(ButtonStyle.Success);
 
-            await newChannel.send({ content: `Let the picks and bans begin! <@${teamA.captain_id}>, <@${teamB.captain_id}>`, embeds: [embed] });
+            const row = new ActionRowBuilder().addComponents(startButton);
+
+            const message = await channel.send({ 
+                content: `Let the picks and bans begin! <@${match.team_a_captain_id}>, <@${match.team_b_captain_id}>. One of you, please press the button to start.`, 
+                embeds: [initialEmbed],
+                components: [row]
+            });
+
+            const collector = message.createMessageComponentCollector({
+                filter: i => i.customId === `start-pickban-button_${matchId}` && (i.user.id === match.team_a_captain_id || i.user.id === match.team_b_captain_id),
+                max: 1,
+                time: 300000 // 5 minutes
+            });
+
+            collector.on('collect', async i => {
+                await i.deferUpdate(); // Defer the button interaction
+                let conn;
+                try {
+                    conn = await dbPool.getConnection();
+                    await conn.execute('UPDATE PickBans SET status = \'IN_PROGRESS\' WHERE pick_ban_id = ?', [pickBanId]);
+                    bot.runPickBanProcess(i, matchId, pickBanId);
+                } catch (error) {
+                    console.error('Error in startPickBan button collector:', error);
+                    await i.followUp({ content: 'An error occurred while trying to start the pick/ban process.', ephemeral: true });
+                } finally {
+                    if (conn) conn.release();
+                }
+            });
+
+            collector.on('end', collected => {
+                if (collected.size === 0) {
+                    message.edit({ content: 'The start button has expired. A staff member can re-initiate the process.', components: [] });
+                }
+            });
 
         } catch (error) {
             console.error('Error in startPickBan function:', error);
+            // Potentially notify the initiating user of the failure
+            const user = await bot.users.fetch(initiatingUser.userId);
+            if (user) {
+                user.send(`Failed to start the pick/ban process for Match ID ${matchId}. Reason: ${error.message}`).catch(console.error);
+            }
         } finally {
             if (conn) conn.release();
         }
     };
+
 
     console.log('Attempting to log in Discord bot...');
     bot.login(DISCORD_BOT_TOKEN).catch(error => {

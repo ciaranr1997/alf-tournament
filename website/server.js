@@ -47,6 +47,7 @@ const dbPool = mysql.createPool({
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
+    namedPlaceholders: true,
     supportBigNumbers: true,
     bigNumberStrings: true
 });
@@ -88,6 +89,7 @@ const { EmbedBuilder } = require('discord.js');
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/public', express.static(path.join(__dirname, 'public')));
+app.use('/css', express.static(path.join(__dirname, 'css')));
 
 
 // --- Role Definitions ---
@@ -198,6 +200,24 @@ app.get('/staff/matches', requireRole(ROLES.STAFF), (req, res) => {
     const pageHtml = readTemplate('staff_matches.html', {
         USERNAME: req.user.username,
         USER_ROLE: req.user.role,
+    });
+    res.send(pageHtml);
+});
+
+app.get('/staff/match/:matchId', requireRole(ROLES.STAFF), (req, res) => {
+    const pageHtml = readTemplate('staff_match_details.html', {
+        USERNAME: req.user.username,
+        USER_ROLE: req.user.role,
+        MATCH_ID: req.params.matchId
+    });
+    res.send(pageHtml);
+});
+
+app.get('/staff/match/:matchId', requireRole(ROLES.STAFF), (req, res) => {
+    const pageHtml = readTemplate('staff_match_details.html', {
+        USERNAME: req.user.username,
+        USER_ROLE: req.user.role,
+        MATCH_ID: req.params.matchId
     });
     res.send(pageHtml);
 });
@@ -767,6 +787,305 @@ app.delete('/api/matches/:id', requireRole(ROLES.STAFF), async (req, res) => {
     } catch (error) {
         console.error('Error deleting match:', error);
         res.status(500).json({ message: 'Error deleting match' });
+    }
+});
+
+
+
+app.post('/api/matches/:matchId/pick', requireRole(ROLES.STAFF), async (req, res) => {
+    const { matchId } = req.params;
+    const { killerId, teamId } = req.body;
+
+    if (!killerId || !teamId) {
+        return res.status(400).json({ message: 'killerId and teamId are required.' });
+    }
+
+    let conn;
+    try {
+        conn = await dbPool.getConnection();
+        await conn.beginTransaction();
+
+        const [matches] = await conn.execute('SELECT team_a_id, team_b_id FROM Matches WHERE match_id = ?', [matchId]);
+        if (matches.length === 0) {
+            throw new Error('Match not found');
+        }
+        const match = matches[0];
+
+        const [sessions] = await conn.execute('SELECT * FROM PickBanSessions WHERE match_id = ? FOR UPDATE', [matchId]);
+        if (sessions.length === 0) {
+            throw new Error('Pick/Ban session not found.');
+        }
+        const session = sessions[0];
+        const pickedKillers = JSON.parse(session.picked_killers || '{}');
+
+        const teamIdentifier = match.team_a_id.toString() === teamId.toString() ? 'team_a' : 'team_b';
+
+        if (pickedKillers[teamIdentifier]) {
+            throw new Error('This team has already picked a killer.');
+        }
+        
+        pickedKillers[teamIdentifier] = killerId;
+
+        await conn.execute('UPDATE PickBanSessions SET picked_killers = ? WHERE match_id = ?', [JSON.stringify(pickedKillers), matchId]);
+        
+        await conn.commit();
+        res.json({ message: 'Killer picked successfully.' });
+    } catch (error) {
+        if (conn) await conn.rollback();
+        console.error(`Error picking killer for match ${matchId}:`, error);
+        res.status(500).json({ message: error.message || 'Failed to pick killer.' });
+    } finally {
+        if (conn) conn.release();
+    }
+});
+
+app.post('/api/matches/:matchId/ban', requireRole(ROLES.STAFF), async (req, res) => {
+    const { matchId } = req.params;
+    const { killerId } = req.body;
+
+    if (!killerId) {
+        return res.status(400).json({ message: 'killerId is required.' });
+    }
+
+    let conn;
+    try {
+        conn = await dbPool.getConnection();
+        await conn.beginTransaction();
+
+        const [sessions] = await conn.execute('SELECT * FROM PickBanSessions WHERE match_id = ? FOR UPDATE', [matchId]);
+        if (sessions.length === 0) {
+            throw new Error('Pick/Ban session not found.');
+        }
+        const session = sessions[0];
+        const bannedKillers = JSON.parse(session.banned_killers || '[]');
+
+        if (bannedKillers.includes(killerId)) {
+            throw new Error('This killer has already been banned.');
+        }
+
+        bannedKillers.push(killerId);
+
+        await conn.execute('UPDATE PickBanSessions SET banned_killers = ? WHERE match_id = ?', [JSON.stringify(bannedKillers), matchId]);
+
+        await conn.commit();
+        res.json({ message: 'Killer banned successfully.' });
+    } catch (error) {
+        if (conn) await conn.rollback();
+        console.error(`Error banning killer for match ${matchId}:`, error);
+        res.status(500).json({ message: error.message || 'Failed to ban killer.' });
+    } finally {
+        if (conn) conn.release();
+    }
+});
+
+app.get('/api/matches/:matchId/pick-ban-status', requireRole(ROLES.STAFF), async (req, res) => {
+    const { matchId } = req.params;
+    let conn;
+    try {
+        conn = await dbPool.getConnection();
+
+        // 1. Get Match and Team info
+        const [matches] = await conn.execute(`
+            SELECT m.team_a_id, m.team_b_id, tA.team_name as team_a_name, tB.team_name as team_b_name
+            FROM Matches m
+            JOIN Teams tA ON m.team_a_id = tA.team_id
+            JOIN Teams tB ON m.team_b_id = tB.team_id
+            WHERE m.match_id = ?
+        `, [matchId]);
+
+        if (matches.length === 0) {
+            return res.status(404).json({ message: 'Match not found.' });
+        }
+        const match = matches[0];
+
+        // 2. Get all allowed killers
+        const [allKillers] = await conn.execute('SELECT killer_id, killer_name, art_url FROM Killers WHERE allowed = 1 ORDER BY killer_order');
+
+        // 3. Get or create Pick/Ban session
+        let [sessions] = await conn.execute('SELECT * FROM PickBanSessions WHERE match_id = ?', [matchId]);
+        let session;
+        if (sessions.length === 0) {
+            // Create a new session if it doesn't exist
+            const newSession = {
+                match_id: matchId,
+                banned_killers: JSON.stringify([]),
+                picked_killers: JSON.stringify({ team_a: null, team_b: null, tiebreaker: null })
+            };
+            const [insertResult] = await conn.execute(
+                'INSERT INTO PickBanSessions (match_id, banned_killers, picked_killers) VALUES (?, ?, ?)',
+                [newSession.match_id, newSession.banned_killers, newSession.picked_killers]
+            );
+            session = { ...newSession, pick_ban_id: insertResult.insertId };
+        } else {
+            session = sessions[0];
+        }
+
+        const bannedKillersList = JSON.parse(session.banned_killers || '[]');
+        const pickedKillersData = JSON.parse(session.picked_killers || '{}');
+
+        // 4. Determine available killers
+        const pickedIds = Object.values(pickedKillersData).filter(id => id);
+        const unavailableIds = new Set([...bannedKillersList, ...pickedIds]);
+        const availableKillers = allKillers.filter(k => !unavailableIds.has(k.killer_id));
+
+        // 5. Determine next action based on the rules
+        let nextAction = 'Completed';
+        let nextTeamId = null;
+        if (!pickedKillersData.team_a) {
+            nextAction = `Team A Pick (${match.team_a_name})`;
+            nextTeamId = match.team_a_id;
+        } else if (!pickedKillersData.team_b) {
+            nextAction = `Team B Pick (${match.team_b_name})`;
+            nextTeamId = match.team_b_id;
+        } else {
+            // Alternating bans
+            const totalPicks = 2;
+            const totalBans = bannedKillersList.length;
+            const totalActions = totalPicks + totalBans;
+            
+            // Team A bans on even total actions (after picks), Team B on odd
+            if (availableKillers.length > 1) {
+                 if (totalBans % 2 === 0) { // Team A's turn to ban
+                    nextAction = `Team A Ban (${match.team_a_name})`;
+                    nextTeamId = match.team_a_id;
+                } else { // Team B's turn to ban
+                    nextAction = `Team B Ban (${match.team_b_name})`;
+                    nextTeamId = match.team_b_id;
+                }
+            }
+        }
+        
+        // 6. If only one killer is left, it's the tiebreaker
+        if (availableKillers.length === 1 && !pickedKillersData.tiebreaker) {
+             pickedKillersData.tiebreaker = availableKillers[0].killer_id;
+             unavailableIds.add(availableKillers[0].killer_id);
+             
+             await conn.execute('UPDATE PickBanSessions SET picked_killers = ? WHERE match_id = ?', [JSON.stringify(pickedKillersData), matchId]);
+             
+             // Refilter available killers, which should now be empty
+             availableKillers.pop();
+             nextAction = 'Completed';
+             nextTeamId = null;
+        }
+
+
+        // 7. Construct final response
+        const teamAPick = pickedKillersData.team_a ? allKillers.find(k => k.killer_id === pickedKillersData.team_a) : null;
+        const teamBPick = pickedKillersData.team_b ? allKillers.find(k => k.killer_id === pickedKillersData.team_b) : null;
+        const tiebreaker = pickedKillersData.tiebreaker ? allKillers.find(k => k.killer_id === pickedKillersData.tiebreaker) : null;
+        const bannedKillers = bannedKillersList.map(id => allKillers.find(k => k.killer_id === id)).filter(k => k);
+
+
+        res.json({
+            matchId: matchId,
+            team_a_name: match.team_a_name,
+            team_b_name: match.team_b_name,
+            team_a_id: match.team_a_id,
+            team_b_id: match.team_b_id,
+            team_a_pick: teamAPick,
+            team_b_pick: teamBPick,
+            tiebreaker: tiebreaker,
+            banned_killers: bannedKillers,
+            available_killers: availableKillers,
+            next_action: nextAction,
+            next_team_id: nextTeamId
+        });
+
+    } catch (error) {
+        console.error(`Error fetching pick/ban status for match ${matchId}:`, error);
+        res.status(500).json({ message: 'Error fetching pick/ban status.' });
+    } finally {
+        if (conn) conn.release();
+    }
+});
+
+app.post('/api/matches/:matchId/pick', requireRole(ROLES.STAFF), async (req, res) => {
+    const { matchId } = req.params;
+    const { killerId, teamId } = req.body;
+
+    if (!killerId || !teamId) {
+        return res.status(400).json({ message: 'killerId and teamId are required.' });
+    }
+
+    let conn;
+    try {
+        conn = await dbPool.getConnection();
+        await conn.beginTransaction();
+
+        const [matches] = await conn.execute('SELECT team_a_id, team_b_id FROM Matches WHERE match_id = ?', [matchId]);
+        if (matches.length === 0) {
+            throw new Error('Match not found');
+        }
+        const match = matches[0];
+
+        const [sessions] = await conn.execute('SELECT * FROM PickBanSessions WHERE match_id = ? FOR UPDATE', [matchId]);
+        if (sessions.length === 0) {
+            throw new Error('Pick/Ban session not found.');
+        }
+        const session = sessions[0];
+        const pickedKillers = JSON.parse(session.picked_killers || '{}');
+
+        const teamIdentifier = match.team_a_id.toString() === teamId.toString() ? 'team_a' : 'team_b';
+
+        if (pickedKillers[teamIdentifier]) {
+            throw new Error('This team has already picked a killer.');
+        }
+        
+        // Add more validation here if needed (e.g., is it the right team's turn?)
+
+        pickedKillers[teamIdentifier] = killerId;
+
+        await conn.execute('UPDATE PickBanSessions SET picked_killers = ? WHERE match_id = ?', [JSON.stringify(pickedKillers), matchId]);
+        
+        await conn.commit();
+        res.json({ message: 'Killer picked successfully.' });
+    } catch (error) {
+        if (conn) await conn.rollback();
+        console.error(`Error picking killer for match ${matchId}:`, error);
+        res.status(500).json({ message: error.message || 'Failed to pick killer.' });
+    } finally {
+        if (conn) conn.release();
+    }
+});
+
+app.post('/api/matches/:matchId/ban', requireRole(ROLES.STAFF), async (req, res) => {
+    const { matchId } = req.params;
+    const { killerId } = req.body;
+
+    if (!killerId) {
+        return res.status(400).json({ message: 'killerId is required.' });
+    }
+
+    let conn;
+    try {
+        conn = await dbPool.getConnection();
+        await conn.beginTransaction();
+
+        const [sessions] = await conn.execute('SELECT * FROM PickBanSessions WHERE match_id = ? FOR UPDATE', [matchId]);
+        if (sessions.length === 0) {
+            throw new Error('Pick/Ban session not found.');
+        }
+        const session = sessions[0];
+        const bannedKillers = JSON.parse(session.banned_killers || '[]');
+
+        if (bannedKillers.includes(killerId)) {
+            throw new Error('This killer has already been banned.');
+        }
+
+        // Add more validation here if needed (e.g., is it the right team's turn to ban?)
+
+        bannedKillers.push(killerId);
+
+        await conn.execute('UPDATE PickBanSessions SET banned_killers = ? WHERE match_id = ?', [JSON.stringify(bannedKillers), matchId]);
+
+        await conn.commit();
+        res.json({ message: 'Killer banned successfully.' });
+    } catch (error) {
+        if (conn) await conn.rollback();
+        console.error(`Error banning killer for match ${matchId}:`, error);
+        res.status(500).json({ message: error.message || 'Failed to ban killer.' });
+    } finally {
+        if (conn) conn.release();
     }
 });
 
@@ -1662,7 +1981,7 @@ app.post('/api/captain/team/color', requireRole(ROLES.CAPTAIN), async (req, res)
 
     // Validate if the newColor is in the predefined TEAM_COLORS
     if (!TEAM_COLORS.includes(newColor)) {
-        return res.status(400).json({ message: 'Invalid color. Please choose from the available colors.' });
+        //return res.status(400).json({ message: 'Invalid color. Please choose from the available colors.' });
     }
 
     let conn;
@@ -1814,8 +2133,8 @@ app.put('/api/staff/teams/:id', requireRole(ROLES.STAFF), upload.single('logo'),
 
         if (roleColor) { // Only validate if roleColor is provided in the request
             if (!TEAM_COLORS.includes(roleColor)) {
-                await conn.rollback();
-                return res.status(400).json({ message: 'Invalid color. Please choose from the available colors.' });
+                //await conn.rollback();
+                //return res.status(400).json({ message: 'Invalid color. Please choose from the available colors.' });
             }
         }
 

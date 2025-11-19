@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Staff - Match Details</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #1f2937; color: #f9fafb; }
+        .card { background-color: #374151; padding: 1.5rem; border-radius: 0.5rem; }
+        .killer-card { background-color: #4B5563; border-radius: 0.5rem; padding: 1rem; text-align: center; }
+        .killer-art { width: 100%; height: auto; aspect-ratio: 1/1; object-fit: cover; border-radius: 0.25rem; }
+        .banned { filter: grayscale(100%) brightness(0.5); }
+    </style>
+</head>
+<body>
+    <div class="container mx-auto p-4">
+        <div class="card">
+            <h1 class="text-3xl font-bold mb-2">Match Details</h1>
+            <div class="flex justify-between items-center mb-4">
+                <h2 id="team-a-name" class="text-2xl font-semibold text-blue-400">Team A</h2>
+                <span class="text-xl">vs</span>
+                <h2 id="team-b-name" class="text-2xl font-semibold text-red-400">Team B</h2>
+            </div>
+            <p class="text-sm text-gray-400">Match ID: {{MATCH_ID}}</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+            <!-- Picks -->
+            <div class="card col-span-1">
+                <h3 class="text-xl font-bold mb-4">Picks</h3>
+                <div class="space-y-4">
+                    <div>
+                        <h4 id="team-a-pick-title" class="text-lg font-semibold text-blue-400">Team A Pick</h4>
+                        <div id="team-a-pick" class="killer-card mt-2">No Pick</div>
+                    </div>
+                    <div>
+                        <h4 id="team-b-pick-title" class="text-lg font-semibold text-red-400">Team B Pick</h4>
+                        <div id="team-b-pick" class="killer-card mt-2">No Pick</div>
+                    </div>
+                    <div>
+                        <h4 class="text-lg font-semibold">Tiebreaker</h4>
+                        <div id="tiebreaker-pick" class="killer-card mt-2">Not Determined</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bans -->
+            <div class="card col-span-2">
+                <h3 class="text-xl font-bold mb-4">Bans</h3>
+                <div id="banned-killers" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                    <!-- Banned killers will be populated here -->
+                </div>
+            </div>
+        </div>
+
+        <div class="card mt-4">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold">Available Killers</h3>
+                <div id="next-action" class="text-lg font-semibold bg-green-600 px-3 py-1 rounded-md">Loading...</div>
+            </div>
+            <div id="available-killers" class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
+                <!-- Available killers will be populated here -->
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/jquery-3.7.1.min.js"></script>
+    <script>
+        const matchId = "{{MATCH_ID}}";
+
+        function renderKillerCard(killer, isBanned = false) {
+            return `
+                <div class="killer-card ${isBanned ? 'banned' : ''}">
+                    <img src="${killer.art_url}" alt="${killer.killer_name}" class="killer-art">
+                    <h5 class="font-semibold mt-2 truncate">${killer.killer_name}</h5>
+                </div>
+            `;
+        }
+        
+        function loadPickBanStatus() {
+            $.get(`/api/matches/${matchId}/pick-ban-status`, function(status) {
+                $('#team-a-name').text(status.team_a_name);
+                $('#team-b-name').text(status.team_b_name);
+                $('#team-a-pick-title').text(`${status.team_a_name} Pick`);
+                $('#team-b-pick-title').text(`${status.team_b_name} Pick`);
+
+                $('#team-a-pick').html(status.team_a_pick ? renderKillerCard(status.team_a_pick) : 'No Pick');
+                $('#team-b-pick').html(status.team_b_pick ? renderKillerCard(status.team_b_pick) : 'No Pick');
+                $('#tiebreaker-pick').html(status.tiebreaker ? renderKillerCard(status.tiebreaker) : 'Not Determined');
+
+                const bannedKillersContainer = $('#banned-killers');
+                bannedKillersContainer.empty();
+                if (status.banned_killers.length > 0) {
+                    status.banned_killers.forEach(killer => {
+                        bannedKillersContainer.append(renderKillerCard(killer, true));
+                    });
+                } else {
+                    bannedKillersContainer.html('<p class="text-gray-400">No killers banned yet.</p>');
+                }
+
+                const availableKillersContainer = $('#available-killers');
+                availableKillersContainer.empty();
+                if (status.available_killers.length > 0) {
+                    status.available_killers.forEach(killer => {
+                        availableKillersContainer.append(renderActionCard(killer, status.next_action, status.team_a_id, status.team_b_id));
+                    });
+                } else {
+                     availableKillersContainer.html('<p class="text-gray-400">All killers have been picked or banned.</p>');
+                }
+                
+                $('#next-action').text(status.next_action);
+                if (status.next_action === 'Completed') {
+                    $('#next-action').removeClass('bg-green-600').addClass('bg-gray-600');
+                    $('.pick-killer, .ban-killer').prop('disabled', true).addClass('opacity-50');
+                } else {
+                    $('#next-action').removeClass('bg-gray-600').addClass('bg-green-600');
+                }
+
+            }).fail(function(jqXHR, textStatus, errorThrown) {
+                console.error("Error fetching pick/ban status:", textStatus, errorThrown);
+                $('#available-killers').html(`<p class="text-red-500">Error loading status: ${jqXHR.responseJSON?.message || 'Unknown error'}</p>`);
+            });
+        }
+
+        function renderActionCard(killer, nextAction, teamAId, teamBId) {
+            const isPickPhase = nextAction.includes('Pick');
+            const isBanPhase = nextAction.includes('Ban');
+            
+            let pickDisabled = !isPickPhase;
+            let banDisabled = !isBanPhase;
+
+            let actingTeamId = null;
+            if (nextAction.includes('Team A')) actingTeamId = teamAId;
+            if (nextAction.includes('Team B')) actingTeamId = teamBId;
+
+            return `
+                <div class="killer-card">
+                    <img src="${killer.art_url}" alt="${killer.killer_name}" class="killer-art">
+                    <h5 class="font-semibold mt-2 truncate">${killer.killer_name}</h5>
+                    <div class="flex space-x-1 mt-2">
+                        <button 
+                            class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-1 px-2 rounded text-xs w-full pick-killer ${pickDisabled ? 'opacity-50 cursor-not-allowed' : ''}" 
+                            data-killer-id="${killer.killer_id}" 
+                            data-team-id="${actingTeamId}"
+                            ${pickDisabled ? 'disabled' : ''}>
+                            Pick
+                        </button>
+                        <button 
+                            class="bg-red-500 hover:bg-red-600 text-white font-bold py-1 px-2 rounded text-xs w-full ban-killer ${banDisabled ? 'opacity-50 cursor-not-allowed' : ''}" 
+                            data-killer-id="${killer.killer_id}" 
+                            data-team-id="${actingTeamId}"
+                            ${banDisabled ? 'disabled' : ''}>
+                            Ban
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        $(document).ready(function() {
+            loadPickBanStatus();
+
+            $('#available-killers').on('click', '.pick-killer', function() {
+                const killerId = $(this).data('killer-id');
+                const teamId = $(this).data('team-id');
+                
+                if (confirm(`Are you sure you want to PICK ${killerId} for team ${teamId}?`)) {
+                    $.post(`/api/matches/${matchId}/pick`, { killerId, teamId })
+                        .done(function(response) {
+                            alert(response.message);
+                            loadPickBanStatus();
+                        })
+                        .fail(function(jqXHR) {
+                            alert('Error: ' + (jqXHR.responseJSON?.message || 'Failed to pick killer.'));
+                        });
+                }
+            });
+
+            $('#available-killers').on('click', '.ban-killer', function() {
+                const killerId = $(this).data('killer-id');
+                
+                if (confirm(`Are you sure you want to BAN ${killerId}?`)) {
+                    $.post(`/api/matches/${matchId}/ban`, { killerId })
+                        .done(function(response) {
+                            alert(response.message);
+                            loadPickBanStatus();
+                        })
+                        .fail(function(jqXHR) {
+                            alert('Error: ' + (jqXHR.responseJSON?.message || 'Failed to ban killer.'));
+                        });
+                }
+            });
+        });
+    </script>
+</body>
+</html>

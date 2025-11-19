@@ -81,6 +81,7 @@
                             <td class="py-2 px-4 border-b border-gray-600">${match.team2_name}</td>
                             <td class="py-2 px-4 border-b border-gray-600">${match.format}</td>
                             <td class="py-2 px-4 border-b border-gray-600">
+                                <a href="/staff/match/${match.match_id}" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-1 px-2 rounded text-sm">Manage Match</a>
                                 <button class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-1 px-2 rounded text-sm start-pick-ban" data-id="${match.match_id}">Picks/Bans</button>
                                 <button class="bg-red-500 hover:bg-red-600 text-white font-bold py-1 px-2 rounded text-sm delete-match" data-id="${match.match_id}">Delete</button>
                             </td>

@@ -126,7 +126,7 @@
         const niceColors = [
             '#FF6B6B', '#FFD93D', '#6BCB77', '#4D96FF', '#9B59B6', '#F7A072',
             '#3498DB', '#2ECC71', '#F1C40F', '#E74C3C', '#1ABC9C', '#E67E22',
-            '#54a0ff', '#576574', '#222f3e', '#feca57'
+            '#54A0FF', '#576574', '#222F3E', '#FECA57'
         ];
 
         const colorPicker = document.getElementById('color-picker');
@@ -319,7 +319,7 @@
             const formData = new FormData(e.target);
             const selectedMembers = Array.from(document.querySelectorAll('#team-members input:checked')).map(cb => cb.value);
             formData.append('members', JSON.stringify(selectedMembers));
-            formData.append('roleColor', roleColorInput.value); // Add roleColor to form data
+            //formData.append('roleColor', roleColorInput.value); // Add roleColor to form data
 
             const response = await fetch(`/api/staff/teams/${teamId}`, {
                 method: 'PUT',
