@@ -8,6 +8,9 @@ const fs = require('fs');
 const { WebSocketServer } = require('ws');
 
 const streamPipeline = promisify(pipeline);
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function initializeBot(app, dbPool, port) {
     const {
@@ -324,11 +327,12 @@ function initializeBot(app, dbPool, port) {
                 return;
             }
 
-            if (!interaction.member.roles.cache.has(DISCORD_ROLE_IDS.STAFF_ROLE_ID)) {
-                return interaction.reply({ content: 'You do not have permission to approve or reject requests.', ephemeral: true });
-            }
 
             if (action === 'addplayer-approve' || action === 'addplayer-reject') {
+                
+                if (!interaction.member.roles.cache.has(DISCORD_ROLE_IDS.STAFF_ROLE_ID)) {
+                    return interaction.reply({ content: 'You do not have permission to approve or reject requests.', ephemeral: true });
+                }
                 const [captainId, targetId, teamId] = args;
                 let conn;
                 try {
@@ -1232,7 +1236,7 @@ function initializeBot(app, dbPool, port) {
             const pickedKillersData = JSON.parse(session.picked_killers || '{}');
 
             // 3. Determine available killers
-            const pickedIds = Object.values(pickedKillersData).filter(id => id).map(id => parseInt(id, 10));
+            const pickedIds = Object.values(pickedKillersData).filter(id => id);
             const unavailableIds = new Set([...bannedKillersList, ...pickedIds]);
             let availableKillers = allKillers.filter(k => !unavailableIds.has(k.killer_id));
 
@@ -1301,9 +1305,11 @@ function initializeBot(app, dbPool, port) {
 
             if (nextAction !== 'Completed') {
                 embed.addFields({ name: 'Next Action', value: `**${nextAction}**\nIt's <@${nextCaptainId}>'s turn to **${actionType}** a killer.` });
+                
             } else {
                 embed.setTitle(`Picks & Bans Complete: ${match.team_a_name} vs ${match.team_b_name}`);
                 embed.setDescription('The pick and ban phase is finished. Good luck to both teams!');
+                
             }
 
             // 7. Build Action Row (Dropdown Menu)
@@ -1330,11 +1336,38 @@ function initializeBot(app, dbPool, port) {
             // All interactions reaching this function are deferred, so we always edit the reply.
             const replyMessage = await interaction.editReply({ embeds: [embed], components, fetchReply: true });
             console.log(`Updated pick/ban message for match ${matchId}. Next action: ${nextAction}`);
-            if (nextAction === 'Completed') return; // End the process
+            if (nextAction === 'Completed') {
+                // Lock the channel after a delay
+                setTimeout(async () => {
+                    try {
+                        console.log(`Locking channel for match ${matchId} after 1 minute.`);
+                        const guild = interaction.guild;
+                        const teamACaptainMember = await guild.members.fetch(match.team_a_captain_id);
+                        const teamBCaptainMember = await guild.members.fetch(match.team_b_captain_id);
+                        
+                        await interaction.channel.edit({
+                            permissionOverwrites: [
+                                { id: guild.id, deny: ['ViewChannel'] },
+                                { id: bot.user.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] },
+                                { id: teamACaptainMember.id, allow: ['ViewChannel'], deny: ['SendMessages'] },
+                                { id: teamBCaptainMember.id, allow: ['ViewChannel'], deny: ['SendMessages'] },
+                                { id: DISCORD_ROLE_IDS.STAFF_ROLE_ID, allow: ['ViewChannel', 'SendMessages', 'ManageMessages'] },
+                                { id: DISCORD_ROLE_IDS.ADMIN_ROLE_ID, allow: ['ViewChannel', 'SendMessages', 'ManageMessages'] }
+                            ],
+                        });
+                        console.log(`Channel for match ${matchId} locked successfully.`);
+                    } catch (error) {
+                        console.error(`Failed to lock channel for match ${matchId}:`, error);
+                        // Optionally send a message to a log channel if it fails
+                    }
+                }, 60000); // 60 seconds
+
+                return; // End the process
+            }
 
             // 9. Wait for the next interaction on the message we just sent/edited
             const filter = i => i.customId.startsWith(`pickban_${actionType}_${matchId}_${nextTeamId}`) && i.user.id === nextCaptainId;
-            const collector = replyMessage.createMessageComponentCollector({ filter, time: 6000000, max: 1 }); // 5 minute timeout
+            const collector = replyMessage.createMessageComponentCollector({ filter, time: 890000, max: 1 }); // 15 minute timeout
 
             collector.on('collect', async i => {
                 try {
@@ -1377,6 +1410,16 @@ function initializeBot(app, dbPool, port) {
             collector.on('end', collected => {
                 if (collected.size === 0) {
                     interaction.editReply({ content: `The pick/ban for Match ${matchId} has timed out. A staff member will need to restart it.`, embeds: [], components: [] });
+                    interaction.channel.edit({
+                        permissionOverwrites: [
+                            { id: guild.id, deny: ['ViewChannel'] },
+                            { id: bot.user.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] },
+                            { id: teamACaptainMember.id, allow: ['ViewChannel'] },
+                            { id: teamBCaptainMember.id, allow: ['ViewChannel'] },
+                            { id: DISCORD_ROLE_IDS.STAFF_ROLE_ID, allow: ['ViewChannel', 'SendMessages', 'ManageMessages'] },
+                            { id: DISCORD_ROLE_IDS.ADMIN_ROLE_ID, allow: ['ViewChannel', 'SendMessages', 'ManageMessages'] }
+                        ],
+                    });
                 }
             });
 
@@ -1501,6 +1544,16 @@ function initializeBot(app, dbPool, port) {
             collector.on('end', collected => {
                 if (collected.size === 0) {
                     message.edit({ content: 'The start button has expired. A staff member can re-initiate the process.', components: [] });
+                    channel.edit({
+                        permissionOverwrites: [
+                            { id: guild.id, deny: ['ViewChannel'] },
+                            { id: bot.user.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] },
+                            { id: teamACaptainMember.id, allow: ['ViewChannel'] },
+                            { id: teamBCaptainMember.id, allow: ['ViewChannel'] },
+                            { id: DISCORD_ROLE_IDS.STAFF_ROLE_ID, allow: ['ViewChannel', 'SendMessages', 'ManageMessages'] },
+                            { id: DISCORD_ROLE_IDS.ADMIN_ROLE_ID, allow: ['ViewChannel', 'SendMessages', 'ManageMessages'] }
+                        ],
+                    });
                 }
             });
 
