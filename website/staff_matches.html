@@ -3,12 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Staff Panel - Brackets</title>
+    <title>Staff Panel - Matches</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { background-color: #1f2937; color: #f9fafb; }
         .card { background-color: #374151; padding: 2rem; border-radius: 0.5rem; }
         input, select { background-color: #4B5563; color: #F9FAFB; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
     </style>
 </head>
 <body>
@@ -52,6 +53,7 @@
                 <table class="min-w-full">
                     <thead>
                         <tr>
+                            <th class="py-2 px-4 border-b border-gray-600 text-left">Status</th>
                             <th class="py-2 px-4 border-b border-gray-600 text-left">Round</th>
                             <th class="py-2 px-4 border-b border-gray-600 text-left">Team 1</th>
                             <th class="py-2 px-4 border-b border-gray-600 text-left">Team 2</th>
@@ -74,14 +76,18 @@
                 const matchesTable = $("#matchesTable");
                 matchesTable.empty(); // Clear existing rows
                 matches.forEach(match => {
+                    const activeStatus = match.is_active ? '<span class="bg-green-500 text-white text-xs font-medium mr-2 px-2.5 py-0.5 rounded-full">Active</span>' : '';
+                    const rowClass = match.is_active ? 'bg-blue-900/50' : '';
                     const row = `
-                        <tr>
+                        <tr class="${rowClass}">
+                            <td class="py-2 px-4 border-b border-gray-600">${activeStatus}</td>
                             <td class="py-2 px-4 border-b border-gray-600">${match.round_name}</td>
                             <td class="py-2 px-4 border-b border-gray-600">${match.team1_name}</td>
                             <td class="py-2 px-4 border-b border-gray-600">${match.team2_name}</td>
                             <td class="py-2 px-4 border-b border-gray-600">${match.format}</td>
                             <td class="py-2 px-4 border-b border-gray-600">
-                                <a href="/staff/match/${match.match_id}" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-1 px-2 rounded text-sm">Manage Match</a>
+                                <button class="bg-green-500 hover:bg-green-600 text-white font-bold py-1 px-2 rounded text-sm set-active" data-id="${match.match_id}" ${match.is_active ? 'disabled' : ''}>Set Active</button>
+                                <a href="/staff/match/${match.match_id}" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-1 px-2 rounded text-sm">Manage</a>
                                 <button class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-1 px-2 rounded text-sm start-pick-ban" data-id="${match.match_id}">Picks/Bans</button>
                                 <button class="bg-red-500 hover:bg-red-600 text-white font-bold py-1 px-2 rounded text-sm delete-match" data-id="${match.match_id}">Delete</button>
                             </td>
@@ -116,10 +122,28 @@
                 };
 
                 $.post("/api/matches", match, function(data) {
-                    // For now, just log the response
                     console.log(data);
                     loadMatches(); // Refresh the matches table
                 });
+            });
+
+            // Handle "Set Active" button click
+            $("#matchesTable").on("click", ".set-active", function() {
+                const matchId = $(this).data("id");
+                if (confirm("Are you sure you want to set this match as active? All other matches will be deactivated.")) {
+                    $.ajax({
+                        url: "/api/matches/" + matchId + "/active",
+                        type: "PUT",
+                        success: function(result) {
+                            console.log(result);
+                            window.location.href = "/staff/match/" + matchId;
+                        },
+                        error: function(xhr, status, error) {
+                            console.error("Error setting active match:", error);
+                            alert("Error: " + xhr.responseJSON.message);
+                        }
+                    });
+                }
             });
 
             // Handle delete button click

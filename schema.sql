@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: db
--- Generation Time: Nov 17, 2025 at 03:36 AM
+-- Generation Time: Nov 22, 2025 at 04:16 PM
 -- Server version: 10.11.14-MariaDB-ubu2204
 -- PHP Version: 8.3.27
 
@@ -24,36 +24,35 @@ SET time_zone = "+00:00";
 -- --------------------------------------------------------
 
 --
--- Table structure for table `Games`
+-- Table structure for table `Brackets`
 --
 
-CREATE TABLE `Games` (
-  `game_id` int(10) UNSIGNED NOT NULL,
+CREATE TABLE `Brackets` (
   `match_id` int(10) UNSIGNED NOT NULL,
-  `game_number` tinyint(3) UNSIGNED NOT NULL COMMENT 'e.g., 1, 2, 3',
-  `killer_team_id` int(10) UNSIGNED NOT NULL,
-  `survivor_team_id` int(10) UNSIGNED NOT NULL
+  `tournament_id` int(10) UNSIGNED NOT NULL,
+  `team_a_id` int(10) UNSIGNED DEFAULT NULL,
+  `team_b_id` int(10) UNSIGNED DEFAULT NULL,
+  `winner_id` int(10) UNSIGNED DEFAULT NULL,
+  `loser_id` int(10) UNSIGNED DEFAULT NULL,
+  `format` enum('Bo1','Bo3','Bo5') NOT NULL DEFAULT 'Bo3',
+  `round_name` varchar(100) DEFAULT NULL COMMENT 'e.g., Quarter-Finals, Grand Finals',
+  `scheduled_time` datetime DEFAULT NULL,
+  `winner_advances_to_match_id` int(10) UNSIGNED DEFAULT NULL COMMENT 'The next match the winner plays in',
+  `winner_advances_to_slot` enum('A','B') DEFAULT NULL COMMENT 'Which slot the winner takes in the next match'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
 
 --
--- Table structure for table `GameScores`
+-- Table structure for table `GameSurvivors`
 --
 
-CREATE TABLE `GameScores` (
-  `game_score_id` int(10) UNSIGNED NOT NULL,
+CREATE TABLE `GameSurvivors` (
+  `game_survivor_id` int(10) UNSIGNED NOT NULL,
   `game_id` int(10) UNSIGNED NOT NULL,
-  `killer_player_id` bigint(20) UNSIGNED NOT NULL,
-  `survivor_1_id` bigint(20) UNSIGNED NOT NULL,
-  `survivor_1_hooks` tinyint(3) UNSIGNED NOT NULL DEFAULT 0,
-  `survivor_2_id` bigint(20) UNSIGNED NOT NULL,
-  `survivor_2_hooks` tinyint(3) UNSIGNED NOT NULL DEFAULT 0,
-  `survivor_3_id` bigint(20) UNSIGNED NOT NULL,
-  `survivor_3_hooks` tinyint(3) UNSIGNED NOT NULL DEFAULT 0,
-  `survivor_4_id` bigint(20) UNSIGNED NOT NULL,
-  `survivor_4_hooks` tinyint(3) UNSIGNED NOT NULL DEFAULT 0,
-  `gens_completed` tinyint(3) UNSIGNED NOT NULL DEFAULT 0
+  `survivor_id` bigint(20) UNSIGNED DEFAULT NULL,
+  `survivor_slot` int(10) UNSIGNED NOT NULL,
+  `hook_state` int(10) UNSIGNED NOT NULL DEFAULT 0 COMMENT '0: not hooked, 1: hooked once, 2: hooked twice, 3: sacrificed/dead'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -118,32 +117,50 @@ CREATE TABLE `Maps` (
 
 CREATE TABLE `Matches` (
   `match_id` int(10) UNSIGNED NOT NULL,
-  `tournament_id` int(10) UNSIGNED NOT NULL,
-  `team_a_id` int(10) UNSIGNED DEFAULT NULL,
-  `team_b_id` int(10) UNSIGNED DEFAULT NULL,
-  `winner_id` int(10) UNSIGNED DEFAULT NULL,
-  `loser_id` int(10) UNSIGNED DEFAULT NULL,
-  `format` enum('Bo1','Bo3','Bo5') NOT NULL DEFAULT 'Bo3',
-  `round_name` varchar(100) DEFAULT NULL COMMENT 'e.g., Quarter-Finals, Grand Finals',
-  `scheduled_time` datetime DEFAULT NULL,
-  `winner_advances_to_match_id` int(10) UNSIGNED DEFAULT NULL COMMENT 'The next match the winner plays in',
-  `winner_advances_to_slot` enum('A','B') DEFAULT NULL COMMENT 'Which slot the winner takes in the next match'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
--- --------------------------------------------------------
-
---
--- Table structure for table `matchups`
---
-
-CREATE TABLE `matchups` (
-  `match_id` int(10) UNSIGNED NOT NULL,
   `tournament_id` int(10) NOT NULL,
   `team_a_id` int(10) UNSIGNED DEFAULT NULL,
   `team_b_id` int(10) UNSIGNED DEFAULT NULL,
   `round_name` varchar(255) DEFAULT NULL,
   `format` varchar(255) DEFAULT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `winner_id` int(10) UNSIGNED DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 0,
+  `bracket_match_id` int(10) UNSIGNED DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `MatchGames`
+--
+
+CREATE TABLE `MatchGames` (
+  `game_id` int(10) UNSIGNED NOT NULL,
+  `set_id` int(10) UNSIGNED NOT NULL,
+  `game_number` int(10) UNSIGNED NOT NULL,
+  `killer_team_id` int(10) UNSIGNED NOT NULL,
+  `survivor_team_id` int(10) UNSIGNED NOT NULL,
+  `killer_id` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `gens_remaining` int(10) UNSIGNED NOT NULL DEFAULT 5,
+  `winner_id` int(10) UNSIGNED DEFAULT NULL,
+  `status` enum('PENDING','IN_PROGRESS','COMPLETED') NOT NULL DEFAULT 'PENDING'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `MatchSets`
+--
+
+CREATE TABLE `MatchSets` (
+  `set_id` int(10) UNSIGNED NOT NULL,
+  `match_id` int(10) UNSIGNED NOT NULL,
+  `set_number` int(10) UNSIGNED NOT NULL,
+  `team_a_score` int(10) UNSIGNED NOT NULL DEFAULT 0,
+  `team_b_score` int(10) UNSIGNED NOT NULL DEFAULT 0,
+  `winner_id` int(10) UNSIGNED DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 0,
+  `tiebreaker` tinyint(1) NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -301,6 +318,9 @@ CREATE TABLE `TournamentTeams` (
 CREATE TABLE `Users` (
   `user_id` bigint(20) UNSIGNED NOT NULL COMMENT 'Discord User ID',
   `username` varchar(255) NOT NULL,
+  `hours` int(8) DEFAULT NULL,
+  `region` varchar(10) DEFAULT NULL,
+  `platform` varchar(30) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -310,25 +330,25 @@ CREATE TABLE `Users` (
 --
 
 --
--- Indexes for table `Games`
+-- Indexes for table `Brackets`
 --
-ALTER TABLE `Games`
-  ADD PRIMARY KEY (`game_id`),
-  ADD KEY `match_id` (`match_id`),
-  ADD KEY `killer_team_id` (`killer_team_id`),
-  ADD KEY `survivor_team_id` (`survivor_team_id`);
+ALTER TABLE `Brackets`
+  ADD PRIMARY KEY (`match_id`),
+  ADD KEY `tournament_id` (`tournament_id`),
+  ADD KEY `team_a_id` (`team_a_id`),
+  ADD KEY `team_b_id` (`team_b_id`),
+  ADD KEY `winner_id` (`winner_id`),
+  ADD KEY `loser_id` (`loser_id`),
+  ADD KEY `fk_winner_advances_to_match` (`winner_advances_to_match_id`);
 
 --
--- Indexes for table `GameScores`
+-- Indexes for table `GameSurvivors`
 --
-ALTER TABLE `GameScores`
-  ADD PRIMARY KEY (`game_score_id`),
-  ADD UNIQUE KEY `game_id_unique` (`game_id`),
-  ADD KEY `killer_player_id` (`killer_player_id`),
-  ADD KEY `survivor_1_id` (`survivor_1_id`),
-  ADD KEY `survivor_2_id` (`survivor_2_id`),
-  ADD KEY `survivor_3_id` (`survivor_3_id`),
-  ADD KEY `survivor_4_id` (`survivor_4_id`);
+ALTER TABLE `GameSurvivors`
+  ADD PRIMARY KEY (`game_survivor_id`),
+  ADD UNIQUE KEY `game_slot` (`game_id`,`survivor_slot`),
+  ADD UNIQUE KEY `game_player` (`game_id`,`survivor_id`),
+  ADD KEY `survivor_id` (`survivor_id`);
 
 --
 -- Indexes for table `KillerMaps`
@@ -364,20 +384,29 @@ ALTER TABLE `Maps`
 --
 ALTER TABLE `Matches`
   ADD PRIMARY KEY (`match_id`),
-  ADD KEY `tournament_id` (`tournament_id`),
-  ADD KEY `team_a_id` (`team_a_id`),
-  ADD KEY `team_b_id` (`team_b_id`),
+  ADD KEY `team1_id` (`team_a_id`),
+  ADD KEY `team2_id` (`team_b_id`),
   ADD KEY `winner_id` (`winner_id`),
-  ADD KEY `loser_id` (`loser_id`),
-  ADD KEY `fk_winner_advances_to_match` (`winner_advances_to_match_id`);
+  ADD KEY `idx_bracket_match_id` (`bracket_match_id`);
 
 --
--- Indexes for table `matchups`
+-- Indexes for table `MatchGames`
 --
-ALTER TABLE `matchups`
-  ADD PRIMARY KEY (`match_id`),
-  ADD KEY `team1_id` (`team_a_id`),
-  ADD KEY `team2_id` (`team_b_id`);
+ALTER TABLE `MatchGames`
+  ADD PRIMARY KEY (`game_id`),
+  ADD KEY `set_id` (`set_id`),
+  ADD KEY `killer_team_id` (`killer_team_id`),
+  ADD KEY `survivor_team_id` (`survivor_team_id`),
+  ADD KEY `killer_id` (`killer_id`),
+  ADD KEY `winner_id` (`winner_id`);
+
+--
+-- Indexes for table `MatchSets`
+--
+ALTER TABLE `MatchSets`
+  ADD PRIMARY KEY (`set_id`),
+  ADD UNIQUE KEY `match_set_number` (`match_id`,`set_number`),
+  ADD KEY `winner_id` (`winner_id`);
 
 --
 -- Indexes for table `OverlayElements`
@@ -462,16 +491,16 @@ ALTER TABLE `Users`
 --
 
 --
--- AUTO_INCREMENT for table `Games`
+-- AUTO_INCREMENT for table `Brackets`
 --
-ALTER TABLE `Games`
-  MODIFY `game_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
+ALTER TABLE `Brackets`
+  MODIFY `match_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
--- AUTO_INCREMENT for table `GameScores`
+-- AUTO_INCREMENT for table `GameSurvivors`
 --
-ALTER TABLE `GameScores`
-  MODIFY `game_score_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
+ALTER TABLE `GameSurvivors`
+  MODIFY `game_survivor_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `KillerMaps`
@@ -498,10 +527,16 @@ ALTER TABLE `Matches`
   MODIFY `match_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
--- AUTO_INCREMENT for table `matchups`
+-- AUTO_INCREMENT for table `MatchGames`
 --
-ALTER TABLE `matchups`
-  MODIFY `match_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
+ALTER TABLE `MatchGames`
+  MODIFY `game_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `MatchSets`
+--
+ALTER TABLE `MatchSets`
+  MODIFY `set_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `OverlayElements`
@@ -550,23 +585,22 @@ ALTER TABLE `Tournaments`
 --
 
 --
--- Constraints for table `Games`
+-- Constraints for table `Brackets`
 --
-ALTER TABLE `Games`
-  ADD CONSTRAINT `Games_ibfk_1` FOREIGN KEY (`match_id`) REFERENCES `Matches` (`match_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `Games_ibfk_2` FOREIGN KEY (`killer_team_id`) REFERENCES `Teams` (`team_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `Games_ibfk_3` FOREIGN KEY (`survivor_team_id`) REFERENCES `Teams` (`team_id`) ON DELETE CASCADE;
+ALTER TABLE `Brackets`
+  ADD CONSTRAINT `Brackets_ibfk_1` FOREIGN KEY (`tournament_id`) REFERENCES `Tournaments` (`tournament_id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `Brackets_ibfk_2` FOREIGN KEY (`team_a_id`) REFERENCES `Teams` (`team_id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `Brackets_ibfk_3` FOREIGN KEY (`team_b_id`) REFERENCES `Teams` (`team_id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `Brackets_ibfk_4` FOREIGN KEY (`winner_id`) REFERENCES `Teams` (`team_id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `Brackets_ibfk_5` FOREIGN KEY (`loser_id`) REFERENCES `Teams` (`team_id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_winner_advances_to_match` FOREIGN KEY (`winner_advances_to_match_id`) REFERENCES `Brackets` (`match_id`) ON DELETE SET NULL;
 
 --
--- Constraints for table `GameScores`
+-- Constraints for table `GameSurvivors`
 --
-ALTER TABLE `GameScores`
-  ADD CONSTRAINT `GameScores_ibfk_1` FOREIGN KEY (`game_id`) REFERENCES `Games` (`game_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `GameScores_ibfk_2` FOREIGN KEY (`killer_player_id`) REFERENCES `Users` (`user_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `GameScores_ibfk_3` FOREIGN KEY (`survivor_1_id`) REFERENCES `Users` (`user_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `GameScores_ibfk_4` FOREIGN KEY (`survivor_2_id`) REFERENCES `Users` (`user_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `GameScores_ibfk_5` FOREIGN KEY (`survivor_3_id`) REFERENCES `Users` (`user_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `GameScores_ibfk_6` FOREIGN KEY (`survivor_4_id`) REFERENCES `Users` (`user_id`) ON DELETE CASCADE;
+ALTER TABLE `GameSurvivors`
+  ADD CONSTRAINT `GameSurvivors_ibfk_1` FOREIGN KEY (`game_id`) REFERENCES `MatchGames` (`game_id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `GameSurvivors_ibfk_2` FOREIGN KEY (`survivor_id`) REFERENCES `Users` (`user_id`) ON DELETE SET NULL;
 
 --
 -- Constraints for table `KillerMaps`
@@ -591,19 +625,27 @@ ALTER TABLE `Killers`
 -- Constraints for table `Matches`
 --
 ALTER TABLE `Matches`
-  ADD CONSTRAINT `Matches_ibfk_1` FOREIGN KEY (`tournament_id`) REFERENCES `Tournaments` (`tournament_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `Matches_ibfk_2` FOREIGN KEY (`team_a_id`) REFERENCES `Teams` (`team_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `Matches_ibfk_3` FOREIGN KEY (`team_b_id`) REFERENCES `Teams` (`team_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `Matches_ibfk_4` FOREIGN KEY (`winner_id`) REFERENCES `Teams` (`team_id`) ON DELETE SET NULL,
-  ADD CONSTRAINT `Matches_ibfk_5` FOREIGN KEY (`loser_id`) REFERENCES `Teams` (`team_id`) ON DELETE SET NULL,
-  ADD CONSTRAINT `fk_winner_advances_to_match` FOREIGN KEY (`winner_advances_to_match_id`) REFERENCES `Matches` (`match_id`) ON DELETE SET NULL;
+  ADD CONSTRAINT `Matches_ibfk_1` FOREIGN KEY (`team_a_id`) REFERENCES `Teams` (`team_id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `Matches_ibfk_2` FOREIGN KEY (`team_b_id`) REFERENCES `Teams` (`team_id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `Matches_ibfk_3` FOREIGN KEY (`winner_id`) REFERENCES `Teams` (`team_id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_matches_bracket_match` FOREIGN KEY (`bracket_match_id`) REFERENCES `Brackets` (`match_id`) ON DELETE SET NULL;
 
 --
--- Constraints for table `matchups`
+-- Constraints for table `MatchGames`
 --
-ALTER TABLE `matchups`
-  ADD CONSTRAINT `matchups_ibfk_1` FOREIGN KEY (`team_a_id`) REFERENCES `Teams` (`team_id`) ON DELETE SET NULL,
-  ADD CONSTRAINT `matchups_ibfk_2` FOREIGN KEY (`team_b_id`) REFERENCES `Teams` (`team_id`) ON DELETE SET NULL;
+ALTER TABLE `MatchGames`
+  ADD CONSTRAINT `MatchGames_ibfk_1` FOREIGN KEY (`set_id`) REFERENCES `MatchSets` (`set_id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `MatchGames_ibfk_2` FOREIGN KEY (`killer_team_id`) REFERENCES `Teams` (`team_id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `MatchGames_ibfk_3` FOREIGN KEY (`survivor_team_id`) REFERENCES `Teams` (`team_id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `MatchGames_ibfk_4` FOREIGN KEY (`killer_id`) REFERENCES `Killers` (`killer_id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `MatchGames_ibfk_5` FOREIGN KEY (`winner_id`) REFERENCES `Teams` (`team_id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `MatchSets`
+--
+ALTER TABLE `MatchSets`
+  ADD CONSTRAINT `MatchSets_ibfk_1` FOREIGN KEY (`match_id`) REFERENCES `Matches` (`match_id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `MatchSets_ibfk_2` FOREIGN KEY (`winner_id`) REFERENCES `Teams` (`team_id`) ON DELETE SET NULL;
 
 --
 -- Constraints for table `OverlayElements`
@@ -615,15 +657,16 @@ ALTER TABLE `OverlayElements`
 -- Constraints for table `PickBans`
 --
 ALTER TABLE `PickBans`
-  ADD CONSTRAINT `PickBans_ibfk_1` FOREIGN KEY (`match_id`) REFERENCES `Matches` (`match_id`) ON DELETE CASCADE,
   ADD CONSTRAINT `PickBans_ibfk_2` FOREIGN KEY (`team_a_id`) REFERENCES `Teams` (`team_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `PickBans_ibfk_3` FOREIGN KEY (`team_b_id`) REFERENCES `Teams` (`team_id`) ON DELETE CASCADE;
+  ADD CONSTRAINT `PickBans_ibfk_3` FOREIGN KEY (`team_b_id`) REFERENCES `Teams` (`team_id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_pickbans_match_id` FOREIGN KEY (`match_id`) REFERENCES `Matches` (`match_id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `PickBanSessions`
 --
 ALTER TABLE `PickBanSessions`
-  ADD CONSTRAINT `PickBanSessions_ibfk_1` FOREIGN KEY (`match_id`) REFERENCES `Matches` (`match_id`) ON DELETE CASCADE;
+  ADD CONSTRAINT `PickBanSessions_ibfk_1` FOREIGN KEY (`match_id`) REFERENCES `Brackets` (`match_id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_pickbansessions_match_id` FOREIGN KEY (`match_id`) REFERENCES `Matches` (`match_id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `TeamMembers`

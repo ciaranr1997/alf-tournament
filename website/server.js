@@ -764,7 +764,8 @@ app.get('/api/matches', requireRole(ROLES.STAFF), async (req, res) => {
                 m.round_name,
                 t1.team_name as team1_name,
                 t2.team_name as team2_name,
-                m.format
+                m.format,
+                m.is_active
             FROM Matches m
             JOIN Teams t1 ON m.team_a_id = t1.team_id
             JOIN Teams t2 ON m.team_b_id = t2.team_id
@@ -774,6 +775,37 @@ app.get('/api/matches', requireRole(ROLES.STAFF), async (req, res) => {
     } catch (error) {
         console.error('Error fetching matches:', error);
         res.status(500).json({ message: 'Error fetching matches' });
+    }
+});
+
+app.put('/api/matches/:matchId/active', requireRole(ROLES.STAFF), async (req, res) => {
+    const { matchId } = req.params;
+
+    const conn = await dbPool.getConnection();
+    try {
+        await conn.beginTransaction();
+
+        // Deactivate all other matches
+        await conn.execute('UPDATE Matches SET is_active = 0 WHERE is_active = 1');
+
+        // Activate the target match
+        const [result] = await conn.execute(
+            'UPDATE Matches SET is_active = 1 WHERE match_id = ?',
+            [matchId]
+        );
+        
+        await conn.commit();
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Match not found.' });
+        }
+        res.json({ message: 'Match active status updated.' });
+    } catch (error) {
+        await conn.rollback();
+        console.error(`Error updating active status for match ${matchId}:`, error);
+        res.status(500).json({ message: 'Failed to update match status.', error: error.message });
+    } finally {
+        conn.release();
     }
 });
 
@@ -1215,6 +1247,28 @@ app.get('/api/tournament/:tournamentId/bracket-data-jq', async (req, res) => {
             return res.json({ teams: [], results: [] });
         }
 
+        const matchIds = matches.map(m => m.match_id);
+        const [matchSets] = await dbPool.query(
+            'SELECT match_id, winner_id FROM MatchSets WHERE match_id IN (?)',
+            [matchIds]
+        );
+
+        const matchScores = matches.reduce((acc, match) => {
+            acc[match.match_id] = { team_a_wins: 0, team_b_wins: 0 };
+            return acc;
+        }, {});
+
+        matchSets.forEach(set => {
+            const match = matches.find(m => m.match_id == set.match_id);
+            if (match && set.winner_id) {
+                if (set.winner_id == match.team_a_id) {
+                    matchScores[set.match_id].team_a_wins++;
+                } else if (set.winner_id == match.team_b_id) {
+                    matchScores[set.match_id].team_b_wins++;
+                }
+            }
+        });
+
         // --- Data Transformation for jquery-bracket ---
         const bracketTeams = [];
         const bracketResults = [[], [], [], []]; // 4 rounds for a 16-team bracket
@@ -1252,7 +1306,13 @@ app.get('/api/tournament/:tournamentId/bracket-data-jq', async (req, res) => {
             if (roundIndex !== undefined) {
                 let scoreA = null;
                 let scoreB = null;
-                if (match.winner_id && match.team_a_id && match.team_b_id) {
+
+                const scores = matchScores[match.match_id];
+                if (scores && (scores.team_a_wins > 0 || scores.team_b_wins > 0)) {
+                    scoreA = scores.team_a_wins;
+                    scoreB = scores.team_b_wins;
+                } else if (match.winner_id && match.team_a_id && match.team_b_id) {
+                    // Fallback to old logic if no sets are recorded but a winner is present
                     if (String(match.winner_id) === String(match.team_a_id)) {
                         scoreA = 1;
                         scoreB = 0;
@@ -1610,6 +1670,66 @@ app.delete('/api/admin/tournaments/:tournamentId/teams/:teamId', requireRole(ROL
     }
 });
 
+app.post('/api/admin/tournaments/:tournamentId/generate-matches', requireRole(ROLES.ADMIN), async (req, res) => {
+    const { tournamentId } = req.params;
+    const conn = await dbPool.getConnection();
+    try {
+        await conn.beginTransaction();
+
+        // 1. Get all bracket matches with two teams assigned for the tournament
+        const [bracketMatches] = await conn.execute(
+            `SELECT match_id, tournament_id, team_a_id, team_b_id, round_name, format 
+             FROM Brackets 
+             WHERE tournament_id = ? AND team_a_id IS NOT NULL AND team_b_id IS NOT NULL`,
+            [tournamentId]
+        );
+
+        if (bracketMatches.length === 0) {
+            await conn.rollback();
+            return res.status(404).json({ message: 'No bracket matches with two assigned teams found for this tournament.' });
+        }
+
+        // 2. Get all existing playable matches that are already linked to a bracket match
+        const [existingPlayableMatches] = await conn.execute(
+            'SELECT bracket_match_id FROM Matches WHERE bracket_match_id IS NOT NULL AND tournament_id = ?',
+            [tournamentId]
+        );
+        const existingBracketIds = new Set(existingPlayableMatches.map(m => m.bracket_match_id));
+
+        let createdCount = 0;
+
+        // 3. For each bracket match, create a playable match if it doesn't exist
+        for (const bracketMatch of bracketMatches) {
+            if (!existingBracketIds.has(bracketMatch.match_id)) {
+                await conn.execute(
+                    `INSERT INTO Matches (tournament_id, bracket_match_id, team_a_id, team_b_id, round_name, format) 
+                     VALUES (?, ?, ?, ?, ?, ?)`,
+                    [
+                        bracketMatch.tournament_id,
+                        bracketMatch.match_id,
+                        bracketMatch.team_a_id,
+                        bracketMatch.team_b_id,
+                        bracketMatch.round_name,
+                        bracketMatch.format
+                    ]
+                );
+                createdCount++;
+            }
+        }
+
+        await conn.commit();
+        res.json({ message: `${createdCount} new playable match(es) created. ${bracketMatches.length - createdCount} matches already existed.` });
+
+    } catch (error) {
+        await conn.rollback();
+        console.error('Error generating playable matches:', error);
+        res.status(500).json({ message: 'Failed to generate playable matches.' });
+    } finally {
+        conn.release();
+    }
+});
+
+
 // --- OVERLAY ENDPOINTS ---
 
 // GET overlay by slug (public)
@@ -1931,6 +2051,321 @@ app.get('/api/brackets/:matchId', requireRole(ROLES.STAFF), async (req, res) => 
         if (conn) conn.release();
     }
 });
+
+app.get('/api/match/:matchId/details', requireRole(ROLES.STAFF), async (req, res) => {
+    const { matchId } = req.params;
+    const conn = await dbPool.getConnection();
+    try {
+        // 1. Get Match, Team, and Pick/Ban info in parallel
+        const [matchInfo, killers, pickBanStatus] = await Promise.all([
+            conn.query(`
+                SELECT 
+                    m.match_id, m.round_name, m.format, m.winner_id as match_winner_id,
+                    tA.team_id as team_a_id, tA.team_name as team_a_name, tA.logo_url as team_a_logo,
+                    tB.team_id as team_b_id, tB.team_name as team_b_name, tB.logo_url as team_b_logo
+                FROM Matches m
+                JOIN Teams tA ON m.team_a_id = tA.team_id
+                JOIN Teams tB ON m.team_b_id = tB.team_id
+                WHERE m.match_id = ?
+            `, [matchId]),
+            conn.query('SELECT killer_id, killer_name FROM Killers WHERE allowed = 1 ORDER BY killer_name'),
+            conn.query('SELECT picked_killers FROM PickBanSessions WHERE match_id = ?', [matchId])
+        ]);
+
+        if (!matchInfo[0] || matchInfo[0].length === 0) {
+            return res.status(404).json({ message: 'Match not found.' });
+        }
+        const match = matchInfo[0][0];
+
+        // Determine which team picked which killer
+        const pickedKillers = pickBanStatus[0].length > 0 ? JSON.parse(pickBanStatus[0][0].picked_killers || '{}') : {};
+        match.team_a_picked_killer = pickedKillers.team_a;
+        match.team_b_picked_killer = pickedKillers.team_b;
+        match.tiebreaker_killer = pickedKillers.tiebreaker;
+
+        // 2. Get players for both teams in parallel
+        const [teamAMembers, teamBMembers] = await Promise.all([
+            conn.query(`
+                SELECT u.user_id, u.username 
+                FROM Users u
+                JOIN TeamMembers tm ON u.user_id = tm.user_id
+                WHERE tm.team_id = ?
+            `, [match.team_a_id]),
+            conn.query(`
+                SELECT u.user_id, u.username 
+                FROM Users u
+                JOIN TeamMembers tm ON u.user_id = tm.user_id
+                WHERE tm.team_id = ?
+            `, [match.team_b_id])
+        ]);
+        match.team_a_members = teamAMembers[0];
+        match.team_b_members = teamBMembers[0];
+
+        // 3. Get or Create MatchSets and associated Games
+        let [sets] = await conn.query('SELECT * FROM MatchSets WHERE match_id = ? ORDER BY set_number', [matchId]);
+
+        if (sets.length === 0) {
+            // If no sets exist, create them based on the new logic
+            await conn.beginTransaction();
+
+            // Set 1 (Team A's pick)
+            const [set1Result] = await conn.execute('INSERT INTO MatchSets (match_id, set_number, is_active) VALUES (?, 1, 1)', [matchId]);
+            const set1Id = set1Result.insertId;
+            const [game1Result] = await conn.execute('INSERT INTO MatchGames (set_id, game_number, killer_team_id, survivor_team_id, killer_id) VALUES (?, 1, ?, ?, ?)', [set1Id, match.team_a_id, match.team_b_id, match.team_a_picked_killer]);
+            for (let i = 1; i <= 4; i++) await conn.execute('INSERT INTO GameSurvivors (game_id, survivor_slot) VALUES (?, ?)', [game1Result.insertId, i]);
+            const [game2Result] = await conn.execute('INSERT INTO MatchGames (set_id, game_number, killer_team_id, survivor_team_id, killer_id) VALUES (?, 2, ?, ?, ?)', [set1Id, match.team_b_id, match.team_a_id, match.team_a_picked_killer]);
+            for (let i = 1; i <= 4; i++) await conn.execute('INSERT INTO GameSurvivors (game_id, survivor_slot) VALUES (?, ?)', [game2Result.insertId, i]);
+
+            // Set 2 (Team B's pick)
+            const [set2Result] = await conn.execute('INSERT INTO MatchSets (match_id, set_number) VALUES (?, 2)', [matchId]);
+            const set2Id = set2Result.insertId;
+            const [game3Result] = await conn.execute('INSERT INTO MatchGames (set_id, game_number, killer_team_id, survivor_team_id, killer_id) VALUES (?, 1, ?, ?, ?)', [set2Id, match.team_b_id, match.team_a_id, match.team_b_picked_killer]);
+            for (let i = 1; i <= 4; i++) await conn.execute('INSERT INTO GameSurvivors (game_id, survivor_slot) VALUES (?, ?)', [game3Result.insertId, i]);
+            const [game4Result] = await conn.execute('INSERT INTO MatchGames (set_id, game_number, killer_team_id, survivor_team_id, killer_id) VALUES (?, 2, ?, ?, ?)', [set2Id, match.team_a_id, match.team_b_id, match.team_b_picked_killer]);
+            for (let i = 1; i <= 4; i++) await conn.execute('INSERT INTO GameSurvivors (game_id, survivor_slot) VALUES (?, ?)', [game4Result.insertId, i]);
+
+            // Tiebreaker Set
+            const [set3Result] = await conn.execute('INSERT INTO MatchSets (match_id, set_number, tiebreaker) VALUES (?, 3, 1)', [matchId]);
+            const set3Id = set3Result.insertId;
+            const [game5Result] = await conn.execute('INSERT INTO MatchGames (set_id, game_number, killer_team_id, survivor_team_id, killer_id) VALUES (?, 1, ?, ?, ?)', [set3Id, match.team_a_id, match.team_b_id, match.tiebreaker_killer]);
+            for (let i = 1; i <= 4; i++) await conn.execute('INSERT INTO GameSurvivors (game_id, survivor_slot) VALUES (?, ?)', [game5Result.insertId, i]);
+            const [game6Result] = await conn.execute('INSERT INTO MatchGames (set_id, game_number, killer_team_id, survivor_team_id, killer_id) VALUES (?, 2, ?, ?, ?)', [set3Id, match.team_b_id, match.team_a_id, match.tiebreaker_killer]);
+            for (let i = 1; i <= 4; i++) await conn.execute('INSERT INTO GameSurvivors (game_id, survivor_slot) VALUES (?, ?)', [game6Result.insertId, i]);
+
+            await conn.commit();
+            // Refetch the newly created sets
+            [sets] = await conn.query('SELECT * FROM MatchSets WHERE match_id = ? ORDER BY set_number', [matchId]);
+        }
+
+        // 4. Get Games and Survivors for each set
+        for (const set of sets) {
+            const [games] = await conn.query('SELECT * FROM MatchGames WHERE set_id = ? ORDER BY game_number', [set.set_id]);
+            for (const game of games) {
+                const [survivors] = await conn.query('SELECT * FROM GameSurvivors WHERE game_id = ?', [game.game_id]);
+                game.survivors = survivors;
+            }
+            set.games = games;
+        }
+
+        res.json({
+            match,
+            killers: killers[0],
+            sets
+        });
+
+    } catch (error) {
+        console.error(`Error fetching full match details for match ${matchId}:`, error);
+        res.status(500).json({ message: 'Error fetching full match details.', error: error.message });
+    } finally {
+        conn.release();
+    }
+});
+
+
+// --- MATCH MANAGEMENT API ---
+
+app.put('/api/match-games/:gameId', requireRole(ROLES.STAFF), async (req, res) => {
+    const { gameId } = req.params;
+    const { killer_id, gens_remaining } = req.body;
+
+    if (killer_id === undefined && gens_remaining === undefined) {
+        return res.status(400).json({ message: 'No updateable fields provided.' });
+    }
+
+    let updateFields = [];
+    let updateValues = [];
+
+    if (killer_id !== undefined) {
+        updateFields.push('killer_id = ?');
+        updateValues.push(killer_id === '' ? null : killer_id);
+    }
+    if (gens_remaining !== undefined) {
+        updateFields.push('gens_remaining = ?');
+        updateValues.push(gens_remaining);
+    }
+    updateValues.push(gameId);
+
+    try {
+        const [result] = await dbPool.execute(
+            `UPDATE MatchGames SET ${updateFields.join(', ')} WHERE game_id = ?`,
+            updateValues
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Match game not found.' });
+        }
+        res.json({ message: 'Game updated successfully.' });
+    } catch (error) {
+        console.error(`Error updating game ${gameId}:`, error);
+        res.status(500).json({ message: 'Failed to update game.', error: error.message });
+    }
+});
+
+app.put('/api/game-survivors', requireRole(ROLES.STAFF), async (req, res) => {
+    const { game_id, survivor_slot, survivor_id, hook_state } = req.body;
+
+    if (!game_id || !survivor_slot) {
+        return res.status(400).json({ message: 'game_id and survivor_slot are required.' });
+    }
+
+    let updateFields = [];
+    let updateValues = [];
+
+    if (survivor_id !== undefined) {
+        updateFields.push('survivor_id = ?');
+        updateValues.push(survivor_id === '' ? null : survivor_id);
+    }
+    if (hook_state !== undefined) {
+        updateFields.push('hook_state = ?');
+        updateValues.push(hook_state);
+    }
+    
+    if (updateFields.length === 0) {
+        return res.status(400).json({ message: 'No updateable fields provided (survivor_id or hook_state).' });
+    }
+
+    updateValues.push(game_id);
+    updateValues.push(survivor_slot);
+
+    try {
+        // If a new survivor is being assigned, reset their hook state
+        if (survivor_id !== undefined && hook_state === undefined) {
+            updateFields.push('hook_state = 0');
+        }
+
+        const [result] = await dbPool.execute(
+            `UPDATE GameSurvivors SET ${updateFields.join(', ')} WHERE game_id = ? AND survivor_slot = ?`,
+            updateValues
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Game survivor slot not found.' });
+        }
+        res.json({ message: 'Survivor slot updated successfully.' });
+    } catch (error) {
+        // Catch duplicate entry for survivor_id in the same game
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ message: 'This survivor is already in another slot for this game.' });
+        }
+        console.error('Error updating game survivor:', error);
+        res.status(500).json({ message: 'Failed to update survivor slot.', error: error.message });
+    }
+});
+
+app.put('/api/match-sets/:setId/active', requireRole(ROLES.STAFF), async (req, res) => {
+    const { setId } = req.params;
+    const { is_active } = req.body;
+
+    if (is_active === undefined) {
+        return res.status(400).json({ message: 'is_active is required.' });
+    }
+
+    const conn = await dbPool.getConnection();
+    try {
+        await conn.beginTransaction();
+
+        // First, get the match_id for the given set
+        const [set] = await conn.execute('SELECT match_id FROM MatchSets WHERE set_id = ?', [setId]);
+        if (set.length === 0) {
+            throw new Error('Set not found');
+        }
+        const { match_id } = set[0];
+
+        // If we are activating a set, we must deactivate all other sets for THIS match.
+        if (is_active) {
+            await conn.execute('UPDATE MatchSets SET is_active = 0 WHERE match_id = ?', [match_id]);
+        }
+
+        // Now, set the state for the target set.
+        const [result] = await conn.execute(
+            'UPDATE MatchSets SET is_active = ? WHERE set_id = ?',
+            [is_active == 'true' ? 1 : 0, setId]
+        );
+        
+        await conn.commit();
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Match set not found.' });
+        }
+        res.json({ message: 'Set active status updated.' });
+    } catch (error) {
+        await conn.rollback();
+        // Check for lock wait timeout error specifically
+        if (error.code === 'ER_LOCK_WAIT_TIMEOUT') {
+            console.error(`Lock wait timeout for set ${setId}:`, error);
+            return res.status(503).json({ message: 'Database is busy, please try again in a moment.' });
+        }
+        console.error(`Error updating active status for set ${setId}:`, error);
+        res.status(500).json({ message: 'Failed to update set status.', error: error.message });
+    } finally {
+        conn.release();
+    }
+});
+
+app.post('/api/match-sets/:setId/declare-winner', requireRole(ROLES.STAFF), async (req, res) => {
+    const { setId } = req.params;
+    const { winner_id } = req.body; // Winner is now manually provided
+
+    if (!winner_id) {
+        return res.status(400).json({ message: 'winner_id is required.' });
+    }
+
+    const conn = await dbPool.getConnection();
+    try {
+        await conn.beginTransaction();
+
+        // 1. Get set, match, and team info
+        const [setInfo] = await conn.execute(
+            `SELECT s.match_id, m.team_a_id, m.team_b_id 
+             FROM MatchSets s 
+             JOIN Matches m ON s.match_id = m.match_id 
+             WHERE s.set_id = ?`, [setId]
+        );
+        if (setInfo.length === 0) throw new Error('Set not found or not linked to a match.');
+        const { match_id, team_a_id, team_b_id } = setInfo[0];
+
+        // 2. Update the set with the manually chosen winner
+        await conn.execute(
+            'UPDATE MatchSets SET winner_id = ? WHERE set_id = ?',
+            [winner_id, setId]
+        );
+
+        // 3. Check if this determines the match winner
+        const [allSets] = await conn.execute('SELECT winner_id FROM MatchSets WHERE match_id = ?', [match_id]);
+        const teamAWins = allSets.filter(s => String(s.winner_id) === String(team_a_id)).length;
+        const teamBWins = allSets.filter(s => String(s.winner_id) === String(team_b_id)).length;
+
+        // Assuming Bo3 format for now. First to 2 wins.
+        let matchWinnerId = null;
+        if (teamAWins >= 2) matchWinnerId = team_a_id;
+        if (teamBWins >= 2) matchWinnerId = team_b_id;
+
+        if (matchWinnerId) {
+            // Update match winner
+            await conn.execute('UPDATE Matches SET winner_id = ? WHERE match_id = ?', [matchWinnerId, match_id]);
+            // TODO: Implement bracket progression logic if this match is part of a bracket
+            // await advanceWinner(match_id, matchWinnerId, conn);
+        }
+
+        await conn.commit();
+        res.json({ 
+            message: `Set winner declared successfully.`,
+            matchWinner: matchWinnerId ? `Match winner is Team ${matchWinnerId}` : 'Match continues.'
+        });
+
+    } catch (error) {
+        await conn.rollback();
+        console.error(`Error declaring winner for set ${setId}:`, error);
+        res.status(500).json({ message: 'Failed to declare winner.', error: error.message });
+    } finally {
+        conn.release();
+    }
+});
+
+
+
+
+
 
 // New API endpoint to get the active tournament ID
 app.get('/api/tournaments/active', async (req, res) => {
@@ -2328,6 +2763,108 @@ app.delete('/api/staff/teams/:id', requireRole(ROLES.ADMIN), async (req, res) =>
 app.get('/login', (req, res) => {
     const url = `https://discord.com/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(DISCORD_REDIRECT_URI)}&scope=identify%20guilds.members.read`;
     res.redirect(url);
+});
+
+// --- DEV ENDPOINT (temporary) ---
+app.get('/api/dev/setup-match-tables', requireRole(ROLES.ADMIN), async (req, res) => {
+    const conn = await dbPool.getConnection();
+    try {
+        await conn.beginTransaction();
+
+        // Drop tables in reverse order of creation to avoid foreign key issues
+        await conn.execute('DROP TABLE IF EXISTS `GameSurvivors`;');
+        await conn.execute('DROP TABLE IF EXISTS `MatchGames`;');
+        await conn.execute('DROP TABLE IF EXISTS `MatchSets`;');
+
+        const createMatchSets = `
+            CREATE TABLE \`MatchSets\` (
+              \`set_id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+              \`match_id\` INT UNSIGNED NOT NULL,
+              \`set_number\` INT UNSIGNED NOT NULL,
+              \`team_a_score\` INT UNSIGNED NOT NULL DEFAULT 0,
+              \`team_b_score\` INT UNSIGNED NOT NULL DEFAULT 0,
+              \`winner_id\` INT UNSIGNED DEFAULT NULL,
+              \`is_active\` BOOLEAN NOT NULL DEFAULT 0,
+              \`tiebreaker\` BOOLEAN NOT NULL DEFAULT 0,
+              PRIMARY KEY (\`set_id\`),
+              UNIQUE KEY \`match_set_number\` (\`match_id\`, \`set_number\`),
+              FOREIGN KEY (\`match_id\`) REFERENCES \`Matches\`(\`match_id\`) ON DELETE CASCADE,
+              FOREIGN KEY (\`winner_id\`) REFERENCES \`Teams\`(\`team_id\`) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+        `;
+
+        const createMatchGames = `
+            CREATE TABLE \`MatchGames\` (
+              \`game_id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+              \`set_id\` INT UNSIGNED NOT NULL,
+              \`game_number\` INT UNSIGNED NOT NULL,
+              \`killer_team_id\` INT UNSIGNED NOT NULL,
+              \`survivor_team_id\` INT UNSIGNED NOT NULL,
+              \`killer_id\` VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+              \`gens_remaining\` INT UNSIGNED NOT NULL DEFAULT 5,
+              \`winner_id\` INT UNSIGNED DEFAULT NULL,
+              \`status\` ENUM('PENDING', 'IN_PROGRESS', 'COMPLETED') NOT NULL DEFAULT 'PENDING',
+              PRIMARY KEY (\`game_id\`),
+              FOREIGN KEY (\`set_id\`) REFERENCES \`MatchSets\`(\`set_id\`) ON DELETE CASCADE,
+              FOREIGN KEY (\`killer_team_id\`) REFERENCES \`Teams\`(\`team_id\`) ON DELETE CASCADE,
+              FOREIGN KEY (\`survivor_team_id\`) REFERENCES \`Teams\`(\`team_id\`) ON DELETE CASCADE,
+              FOREIGN KEY (\`killer_id\`) REFERENCES \`Killers\`(\`killer_id\`) ON DELETE SET NULL,
+              FOREIGN KEY (\`winner_id\`) REFERENCES \`Teams\`(\`team_id\`) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+        `;
+
+        const createGameSurvivors = `
+            CREATE TABLE \`GameSurvivors\` (
+              \`game_survivor_id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+              \`game_id\` INT UNSIGNED NOT NULL,
+              \`survivor_id\` BIGINT UNSIGNED DEFAULT NULL,
+              \`survivor_slot\` INT UNSIGNED NOT NULL,
+              \`hook_state\` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '0: not hooked, 1: hooked once, 2: hooked twice, 3: sacrificed/dead',
+              PRIMARY KEY (\`game_survivor_id\`),
+              UNIQUE KEY \`game_slot\` (\`game_id\`, \`survivor_slot\`),
+              UNIQUE KEY \`game_player\` (\`game_id\`, \`survivor_id\`),
+              FOREIGN KEY (\`game_id\`) REFERENCES \`MatchGames\`(\`game_id\`) ON DELETE CASCADE,
+              FOREIGN KEY (\`survivor_id\`) REFERENCES \`Users\`(\`user_id\`) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+        `;
+
+        await conn.execute(createMatchSets);
+        await conn.execute(createMatchGames);
+        await conn.execute(createGameSurvivors);
+
+        await conn.commit();
+        res.json({ message: 'Match tables dropped and recreated successfully.' });
+    } catch (error) {
+        await conn.rollback();
+        console.error('Error creating match tables:', error);
+        res.status(500).json({ message: 'Failed to create match tables.', error: error.message });
+    } finally {
+        conn.release();
+    }
+});
+
+app.get('/api/dev/add-active-to-matches', requireRole(ROLES.ADMIN), async (req, res) => {
+    const conn = await dbPool.getConnection();
+    try {
+        await conn.beginTransaction();
+        try {
+            await conn.execute('ALTER TABLE Matches ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 0;');
+        } catch (e) {
+            if (e.code === 'ER_DUP_FIELDNAME') {
+                console.log('is_active column already exists in Matches.');
+            } else {
+                throw e;
+            }
+        }
+        await conn.commit();
+        res.json({ message: 'Matches table updated successfully with is_active column.' });
+    } catch (error) {
+        await conn.rollback();
+        console.error('Error altering Matches table:', error);
+        res.status(500).json({ message: 'Failed to alter Matches table.', error: error.message });
+    } finally {
+        conn.release();
+    }
 });
 
 // Pass configuration to the bot via app.locals

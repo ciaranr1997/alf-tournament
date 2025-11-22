@@ -204,6 +204,7 @@
             <div class="controls" style="margin-bottom: 20px;">
                 <a href="/admin/brackets" style="background-color: #6b7280; color: white; padding: 10px 20px; border-radius: 5px; border: none; cursor: pointer; text-decoration: none; margin-right: 10px;">Back to Brackets List</a>
                 <button id="reset-bracket-btn" style="background-color: #dc2626; color: white; padding: 10px 20px; border-radius: 5px; border: none; cursor: pointer; margin-right: 10px;">Reset Bracket</button>
+                <button id="generate-matches-btn" style="background-color: #4f46e5; color: white; padding: 10px 20px; border-radius: 5px; border: none; cursor: pointer; margin-right: 10px;">Generate Playable Matches</button>
                 <button id="save-bracket-btn" style="background-color: #22c55e; color: white; padding: 10px 20px; border-radius: 5px; border: none; cursor: pointer;">Save (Refresh)</button>
             </div>
             <div class="main-content">
@@ -540,6 +541,22 @@
                         }
                     });
         
+                    $('#generate-matches-btn').on('click', async function() {
+                        if (confirm('Are you sure you want to generate playable matches for this bracket? This will create entries in the main matches list for each bracket matchup that has two teams assigned.')) {
+                            try {
+                                const result = await $.ajax({
+                                    url: `/api/admin/tournaments/${tournamentId}/generate-matches`,
+                                    type: 'POST',
+                                    contentType: 'application/json'
+                                });
+                                alert(result.message);
+                            } catch (error) {
+                                console.error('Error generating matches:', error);
+                                alert('Failed to generate matches: ' + (error.responseJSON ? error.responseJSON.message : error.statusText));
+                            }
+                        }
+                    });
+
                     $('#save-bracket-btn').on('click', function() {
                         alert('Bracket state refreshed from database.');
                         loadTeamsAndBracket(); // Re-load the bracket to ensure UI is in sync with DB

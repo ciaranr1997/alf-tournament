@@ -5,12 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Staff - Match Details</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
         body { background-color: #1f2937; color: #f9fafb; }
         .card { background-color: #374151; padding: 1.5rem; border-radius: 0.5rem; }
-        .killer-card { background-color: #4B5563; border-radius: 0.5rem; padding: 1rem; text-align: center; }
+        .killer-card { background-color: #4B5563; border-radius: 0.5rem; padding: 1rem; text-align: center; cursor: pointer; }
         .killer-art { width: 100%; height: auto; aspect-ratio: 1/1; object-fit: cover; border-radius: 0.25rem; }
         .banned { filter: grayscale(100%) brightness(0.5); }
+        .hidden { display: none; }
+        .hook-icon { cursor: pointer; font-size: 1.5rem; color: #6b7280; }
+        .hook-icon.active { color: #ef4444; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .switch { position: relative; display: inline-block; width: 60px; height: 34px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; }
+        .slider:before { position: absolute; content: ""; height: 26px; width: 26px; left: 4px; bottom: 4px; background-color: white; transition: .4s; }
+        input:checked + .slider { background-color: #2196F3; }
+        input:checked + .slider:before { transform: translateX(26px); }
+        .slider.round { border-radius: 34px; }
+        .slider.round:before { border-radius: 50%; }
     </style>
 </head>
 <body>
@@ -25,111 +38,61 @@
             <p class="text-sm text-gray-400">Match ID: {{MATCH_ID}}</p>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-            <!-- Picks -->
-            <div class="card col-span-1">
-                <h3 class="text-xl font-bold mb-4">Picks</h3>
-                <div class="space-y-4">
-                    <div>
-                        <h4 id="team-a-pick-title" class="text-lg font-semibold text-blue-400">Team A Pick</h4>
-                        <div id="team-a-pick" class="killer-card mt-2">No Pick</div>
-                    </div>
-                    <div>
-                        <h4 id="team-b-pick-title" class="text-lg font-semibold text-red-400">Team B Pick</h4>
-                        <div id="team-b-pick" class="killer-card mt-2">No Pick</div>
-                    </div>
-                    <div>
-                        <h4 class="text-lg font-semibold">Tiebreaker</h4>
-                        <div id="tiebreaker-pick" class="killer-card mt-2">Not Determined</div>
+        <div id="pick-ban-results-section">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                <div class="card col-span-1">
+                    <h3 class="text-xl font-bold mb-4">Picks</h3>
+                    <div class="space-y-4">
+                        <div>
+                            <h4 id="team-a-pick-title" class="text-lg font-semibold text-blue-400">Team A Pick</h4>
+                            <div id="team-a-pick" class="killer-card mt-2">No Pick</div>
+                        </div>
+                        <div>
+                            <h4 id="team-b-pick-title" class="text-lg font-semibold text-red-400">Team B Pick</h4>
+                            <div id="team-b-pick" class="killer-card mt-2">No Pick</div>
+                        </div>
+                        <div>
+                            <h4 class="text-lg font-semibold">Tiebreaker</h4>
+                            <div id="tiebreaker-pick" class="killer-card mt-2">Not Determined</div>
+                        </div>
                     </div>
                 </div>
-            </div>
-
-            <!-- Bans -->
-            <div class="card col-span-2">
-                <h3 class="text-xl font-bold mb-4">Bans</h3>
-                <div id="banned-killers" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
-                    <!-- Banned killers will be populated here -->
+                <div class="card col-span-2">
+                    <h3 class="text-xl font-bold mb-4">Bans</h3>
+                    <div id="banned-killers" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2"></div>
                 </div>
             </div>
         </div>
 
-        <div class="card mt-4">
+        <div id="pick-ban-actions-section" class="card mt-4">
             <div class="flex justify-between items-center mb-4">
                 <h3 class="text-xl font-bold">Available Killers</h3>
                 <div id="next-action" class="text-lg font-semibold bg-green-600 px-3 py-1 rounded-md">Loading...</div>
             </div>
-            <div id="available-killers" class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
-                <!-- Available killers will be populated here -->
-            </div>
+            <div id="available-killers" class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4"></div>
         </div>
+
+        <div id="match-management-section" class="hidden mt-4"></div>
     </div>
 
     <script src="/js/jquery-3.7.1.min.js"></script>
     <script>
         const matchId = "{{MATCH_ID}}";
+        let matchData = {};
 
         function renderKillerCard(killer, isBanned = false) {
+            if (!killer) return '<div class="killer-card">Not Set</div>';
             return `
                 <div class="killer-card ${isBanned ? 'banned' : ''}">
-                    <img src="${killer.art_url}" alt="${killer.killer_name}" class="killer-art">
+                    <img src="${killer.art_url || '/public/shield-icon.svg'}" alt="${killer.killer_name}" class="killer-art">
                     <h5 class="font-semibold mt-2 truncate">${killer.killer_name}</h5>
                 </div>
             `;
-        }
-        
-        function loadPickBanStatus() {
-            $.get(`/api/matches/${matchId}/pick-ban-status`, function(status) {
-                $('#team-a-name').text(status.team_a_name);
-                $('#team-b-name').text(status.team_b_name);
-                $('#team-a-pick-title').text(`${status.team_a_name} Pick`);
-                $('#team-b-pick-title').text(`${status.team_b_name} Pick`);
-
-                $('#team-a-pick').html(status.team_a_pick ? renderKillerCard(status.team_a_pick) : 'No Pick');
-                $('#team-b-pick').html(status.team_b_pick ? renderKillerCard(status.team_b_pick) : 'No Pick');
-                $('#tiebreaker-pick').html(status.tiebreaker ? renderKillerCard(status.tiebreaker) : 'Not Determined');
-
-                const bannedKillersContainer = $('#banned-killers');
-                bannedKillersContainer.empty();
-                if (status.banned_killers.length > 0) {
-                    status.banned_killers.forEach(killer => {
-                        bannedKillersContainer.append(renderKillerCard(killer, true));
-                    });
-                } else {
-                    bannedKillersContainer.html('<p class="text-gray-400">No killers banned yet.</p>');
-                }
-
-                const availableKillersContainer = $('#available-killers');
-                availableKillersContainer.empty();
-                if (status.available_killers.length > 0) {
-                    status.available_killers.forEach(killer => {
-                        availableKillersContainer.append(renderActionCard(killer, status.next_action, status.team_a_id, status.team_b_id));
-                    });
-                } else {
-                     availableKillersContainer.html('<p class="text-gray-400">All killers have been picked or banned.</p>');
-                }
-                
-                $('#next-action').text(status.next_action);
-                if (status.next_action === 'Completed') {
-                    $('#next-action').removeClass('bg-green-600').addClass('bg-gray-600');
-                    $('.pick-killer, .ban-killer').prop('disabled', true).addClass('opacity-50');
-                } else {
-                    $('#next-action').removeClass('bg-gray-600').addClass('bg-green-600');
-                }
-
-            }).fail(function(jqXHR, textStatus, errorThrown) {
-                console.error("Error fetching pick/ban status:", textStatus, errorThrown);
-                $('#available-killers').html(`<p class="text-red-500">Error loading status: ${jqXHR.responseJSON?.message || 'Unknown error'}</p>`);
-            });
         }
 
         function renderActionCard(killer, nextAction, teamAId, teamBId) {
             const isPickPhase = nextAction.includes('Pick');
             const isBanPhase = nextAction.includes('Ban');
-            
-            let pickDisabled = !isPickPhase;
-            let banDisabled = !isBanPhase;
-
             let actingTeamId = null;
             if (nextAction.includes('Team A')) actingTeamId = teamAId;
             if (nextAction.includes('Team B')) actingTeamId = teamBId;
@@ -139,28 +102,201 @@
                     <img src="${killer.art_url}" alt="${killer.killer_name}" class="killer-art">
                     <h5 class="font-semibold mt-2 truncate">${killer.killer_name}</h5>
                     <div class="flex space-x-1 mt-2">
-                        <button 
-                            class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-1 px-2 rounded text-xs w-full pick-killer ${pickDisabled ? 'opacity-50 cursor-not-allowed' : ''}" 
-                            data-killer-id="${killer.killer_id}" 
-                            data-team-id="${actingTeamId}"
-                            ${pickDisabled ? 'disabled' : ''}>
-                            Pick
-                        </button>
-                        <button 
-                            class="bg-red-500 hover:bg-red-600 text-white font-bold py-1 px-2 rounded text-xs w-full ban-killer ${banDisabled ? 'opacity-50 cursor-not-allowed' : ''}" 
-                            data-killer-id="${killer.killer_id}" 
-                            data-team-id="${actingTeamId}"
-                            ${banDisabled ? 'disabled' : ''}>
-                            Ban
-                        </button>
+                        <button class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-1 px-2 rounded text-xs w-full pick-killer" data-killer-id="${killer.killer_id}" data-team-id="${actingTeamId}" ${!isPickPhase ? 'disabled' : ''}>Pick</button>
+                        <button class="bg-red-500 hover:bg-red-600 text-white font-bold py-1 px-2 rounded text-xs w-full ban-killer" data-killer-id="${killer.killer_id}" data-team-id="${actingTeamId}" ${!isBanPhase ? 'disabled' : ''}>Ban</button>
                     </div>
                 </div>
             `;
         }
 
+        function renderMatchManagement(data) {
+            const { match, killers, sets } = data;
+            matchData = data;
+            const teamA = { id: match.team_a_id, name: match.team_a_name, members: match.team_a_members };
+            const teamB = { id: match.team_b_id, name: match.team_b_name, members: match.team_b_members };
+
+            const set1 = sets.find(s => s.set_number === 1);
+            const set2 = sets.find(s => s.set_number === 2);
+            const tiebreakerNeeded = set1 && set2 && set1.winner_id && set2.winner_id && set1.winner_id !== set2.winner_id;
+
+            let setsHtml = sets.map(set => renderSet(set, teamA, teamB, killers, tiebreakerNeeded)).join('');
+            $('#match-management-section').html(setsHtml);
+            
+            data.sets.forEach(set => {
+                set.games.forEach(game => {
+                    calculateFreshHooks(game.game_id);
+                });
+            });
+        }
+
+        function renderSet(set, teamA, teamB, killers, tiebreakerNeeded) {
+            let leftTeam, rightTeam, title;
+            const isTiebreaker = set.tiebreaker;
+
+            if (isTiebreaker) {
+                leftTeam = teamA;
+                rightTeam = teamB;
+                title = 'Tiebreaker';
+            } else if (set.set_number === 2) {
+                leftTeam = teamB;
+                rightTeam = teamA;
+                title = `Set ${set.set_number} (Pick: ${leftTeam.name})`;
+            } else {
+                leftTeam = teamA;
+                rightTeam = teamB;
+                title = `Set ${set.set_number} (Pick: ${leftTeam.name})`;
+            }
+
+            const leftTeamGameKiller = set.games.find(g => String(g.killer_team_id) === String(leftTeam.id));
+            const leftTeamGameSurvivor = set.games.find(g => String(g.survivor_team_id) === String(leftTeam.id));
+            const rightTeamGameKiller = set.games.find(g => String(g.killer_team_id) === String(rightTeam.id));
+            const rightTeamGameSurvivor = set.games.find(g => String(g.survivor_team_id) === String(rightTeam.id));
+
+            const isInactive = isTiebreaker && !tiebreakerNeeded;
+
+            return `
+                <div class="card mt-6 ${isInactive ? 'opacity-50 pointer-events-none' : ''}" ${isInactive ? 'title="This set is locked until Set 1 and Set 2 have opposing winners."' : ''}>
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-2xl font-bold">${title}</h3>
+                        <div class="flex items-center space-x-2">
+                            <span class="text-sm font-semibold">Active Set:</span>
+                            <label class="switch">
+                                <input type="checkbox" class="set-active-toggle" data-set-id="${set.set_id}" ${set.is_active ? 'checked' : ''}>
+                                <span class="slider round"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        ${renderTeamColumn(leftTeam, leftTeamGameKiller, leftTeamGameSurvivor, killers, set)}
+                        ${renderTeamColumn(rightTeam, rightTeamGameKiller, rightTeamGameSurvivor, killers, set)}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderTeamColumn(team, killerGame, survivorGame, allKillers, set) {
+            const killerOptions = allKillers.map(k => `<option value="${k.killer_id}" ${killerGame.killer_id == k.killer_id ? 'selected' : ''}>${k.killer_name}</option>`).join('');
+            const isWinner = String(set.winner_id) === String(team.id);
+            const hasWinner = set.winner_id !== null;
+
+            return `
+                <div class="space-y-4 p-4 rounded-lg ${isWinner ? 'bg-green-500/20 border-2 border-green-500' : 'bg-gray-800/50'}">
+                    <div class="flex justify-between items-center">
+                        <h4 class="text-xl font-bold">${team.name}</h4>
+                        <button 
+                            class="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-2 rounded text-sm declare-set-winner" 
+                            data-set-id="${set.set_id}" 
+                            data-winner-id="${team.id}"
+                            ${hasWinner ? 'disabled' : ''}>
+                            Declare Winner
+                        </button>
+                    </div>
+                    
+                    <div class="card bg-gray-900/50">
+                        <h5 class="text-lg font-semibold mb-2">Killer Performance</h5>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="form-label">Killer</label>
+                                <select class="form-select bg-gray-700 border-gray-600 rounded w-full killer-select" data-game-id="${killerGame.game_id}">
+                                    <option value="">Select Killer</option>
+                                    ${killerOptions}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="form-label">Gens Remaining</label>
+                                <input type="number" min="0" max="5" value="${killerGame.gens_remaining}" class="form-input bg-gray-700 border-gray-600 rounded w-full gens-remaining-input" data-game-id="${killerGame.game_id}">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card bg-gray-900/50">
+                        <h5 class="text-lg font-semibold mb-2">Survivor Performance</h5>
+                        <div class="space-y-3">
+                            ${[0, 1, 2, 3].map(i => renderSurvivorRow(survivorGame, team.members, i)).join('')}
+                        </div>
+                        <div class="mt-4 text-right font-bold">Fresh Hooks: <span id="fresh-hooks-${survivorGame.game_id}">0</span></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderSurvivorRow(game, members, index) {
+            const gameSurvivor = game.survivors[index] || { survivor_id: null, hook_state: 0, survivor_slot: index + 1 };
+            const memberOptions = members.map(m => `<option value="${m.user_id}" ${gameSurvivor.survivor_id == m.user_id ? 'selected' : ''}>${m.username}</option>`).join('');
+            
+            return `
+                <div class="grid grid-cols-3 gap-2 items-center survivor-row" data-game-id="${game.game_id}" data-slot="${gameSurvivor.survivor_slot}">
+                    <div class="col-span-1">
+                        <select class="form-select bg-gray-700 border-gray-600 rounded w-full survivor-player-select">
+                            <option value="">Select Survivor</option>
+                            ${memberOptions}
+                        </select>
+                    </div>
+                    <div class="col-span-2 flex justify-around items-center">
+                        <i class="fas fa-bone hook-icon ${gameSurvivor.hook_state >= 1 ? 'active' : ''}" data-hook-level="1"></i>
+                        <i class="fas fa-bone hook-icon ${gameSurvivor.hook_state >= 2 ? 'active' : ''}" data-hook-level="2"></i>
+                        <i class="fas fa-skull-crossbones hook-icon ${gameSurvivor.hook_state >= 3 ? 'active' : ''}" data-hook-level="3"></i>
+                    </div>
+                </div>
+            `;
+        }
+
+        function loadPickBanStatus() {
+            $.get(`/api/matches/${matchId}/pick-ban-status`, function(status) {
+                $('#team-a-name').text(status.team_a_name);
+                $('#team-b-name').text(status.team_b_name);
+                $('#team-a-pick-title').text(`${status.team_a_name} Pick`);
+                $('#team-b-pick-title').text(`${status.team_b_name} Pick`);
+                $('#team-a-pick').html(status.team_a_pick ? renderKillerCard(status.team_a_pick) : 'No Pick');
+                $('#team-b-pick').html(status.team_b_pick ? renderKillerCard(status.team_b_pick) : 'No Pick');
+                $('#tiebreaker-pick').html(status.tiebreaker ? renderKillerCard(status.tiebreaker) : 'Not Determined');
+                const bannedKillersContainer = $('#banned-killers');
+                bannedKillersContainer.empty();
+                if (status.banned_killers.length > 0) {
+                    status.banned_killers.forEach(killer => bannedKillersContainer.append(renderKillerCard(killer, true)));
+                } else {
+                    bannedKillersContainer.html('<p class="text-gray-400 col-span-full">No killers banned yet.</p>');
+                }
+                const availableKillersContainer = $('#available-killers');
+                availableKillersContainer.empty();
+                if (status.available_killers.length > 0) {
+                    status.available_killers.forEach(killer => availableKillersContainer.append(renderActionCard(killer, status.next_action, status.team_a_id, status.team_b_id)));
+                } else {
+                     availableKillersContainer.html('<p class="text-gray-400 col-span-full">All killers have been picked or banned.</p>');
+                }
+                $('#next-action').text(status.next_action);
+                
+                if (status.next_action === 'Completed') {
+                    $('#pick-ban-actions-section').hide();
+                    $('#match-management-section').show();
+                    loadMatchDetails();
+                } else {
+                    $('#pick-ban-actions-section').show();
+                    $('#match-management-section').hide();
+                }
+            }).fail(jqXHR => console.error("Error fetching pick/ban status:", jqXHR));
+        }
+
+        function loadMatchDetails() {
+            $.get(`/api/match/${matchId}/details`, renderMatchManagement)
+             .fail(jqXHR => console.error("Error fetching match details:", jqXHR));
+        }
+
+        function calculateFreshHooks(gameId) {
+            let freshHooks = 0;
+            $(`.survivor-row[data-game-id=${gameId}]`).each(function() {
+                if ($(this).find('.hook-icon[data-hook-level=1]').hasClass('active')) {
+                    freshHooks++;
+                }
+            });
+            $(`#fresh-hooks-${gameId}`).text(freshHooks);
+        }
+
         $(document).ready(function() {
             loadPickBanStatus();
-
+            
+            // --- RESTORED PICK/BAN BUTTON FUNCTIONALITY ---
             $('#available-killers').on('click', '.pick-killer', function() {
                 const killerId = $(this).data('killer-id');
                 const teamId = $(this).data('team-id');
@@ -189,6 +325,85 @@
                         .fail(function(jqXHR) {
                             alert('Error: ' + (jqXHR.responseJSON?.message || 'Failed to ban killer.'));
                         });
+                }
+            });
+            // -----------------------------------------------
+
+            const managementSection = $('#match-management-section');
+
+            managementSection.on('change', '.killer-select', function() {
+                const gameId = $(this).data('game-id');
+                const killerId = $(this).val();
+                $.ajax({ url: `/api/match-games/${gameId}`, type: 'PUT', data: { killer_id: killerId } });
+            });
+
+            managementSection.on('change', '.gens-remaining-input', function() {
+                const gameId = $(this).data('game-id');
+                const gens = $(this).val();
+                $.ajax({ url: `/api/match-games/${gameId}`, type: 'PUT', data: { gens_remaining: gens } });
+            });
+
+            managementSection.on('change', '.survivor-player-select', function() {
+                const row = $(this).closest('.survivor-row');
+                const gameId = row.data('game-id');
+                const slot = row.data('slot');
+                const survivorId = $(this).val();
+                $.ajax({
+                    url: `/api/game-survivors`, type: 'PUT', data: { game_id: gameId, survivor_slot: slot, survivor_id: survivorId },
+                    success: () => loadMatchDetails(),
+                    error: () => loadMatchDetails()
+                });
+            });
+
+            managementSection.on('click', '.hook-icon', function() {
+                const icon = $(this);
+                const row = icon.closest('.survivor-row');
+                const gameId = row.data('game-id');
+                const slot = row.data('slot');
+                const survivorId = row.find('.survivor-player-select').val();
+                if (!survivorId) return alert("Please select a survivor for this slot first.");
+                const level = icon.data('hook-level');
+                const icons = icon.parent().find('.hook-icon');
+                const isActive = icon.hasClass('active');
+                let newHookState = level;
+                if (isActive && (level === 1 || (level === 2 && !icons.eq(2).hasClass('active')) || level === 3)) {
+                    newHookState = level - 1;
+                }
+                $.ajax({
+                    url: `/api/game-survivors`, type: 'PUT', data: { game_id: gameId, survivor_slot: slot, hook_state: newHookState },
+                    success: () => {
+                        icons.removeClass('active');
+                        for(let i = 1; i <= newHookState; i++) {
+                            icons.filter(`[data-hook-level=${i}]`).addClass('active');
+                        }
+                        calculateFreshHooks(gameId);
+                    }
+                });
+            });
+
+            managementSection.on('change', '.set-active-toggle', function() {
+                const setId = $(this).data('set-id');
+                const isActive = $(this).is(':checked');
+                $.ajax({
+                    url: `/api/match-sets/${setId}/active`, type: 'PUT', data: { is_active: isActive },
+                    success: () => loadMatchDetails(),
+                    error: () => loadMatchDetails()
+                });
+            });
+
+            managementSection.on('click', '.declare-set-winner', function() {
+                const setId = $(this).data('set-id');
+                const winnerId = $(this).data('winner-id');
+                const winnerName = $(this).closest('.space-y-4').find('h4').text();
+                if (confirm(`Are you sure you want to declare ${winnerName} as the winner for this set?`)) {
+                    $.ajax({
+                        url: `/api/match-sets/${setId}/declare-winner`, type: 'POST', data: { winner_id: winnerId },
+                        success: (res) => {
+                            alert(res.message + '\n' + res.matchWinner);
+                            loadMatchDetails();
+                        },
+                        error: (err) => alert('Error: ' + (err.responseJSON?.message || 'An unknown error occurred.'))
+                    });
                 }
             });
         });
